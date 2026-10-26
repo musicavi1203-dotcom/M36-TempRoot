@@ -1,25 +1,40 @@
-name: find_validation
+name: build_patched_apk
 on: [workflow_dispatch]
 
 jobs:
-  find_error:
+  build:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout GhostLock
         uses: actions/checkout@v4
         with:
           repository: YuKongA/ghostlock-app
+          path: ghostlock-app
 
-      - name: Search for validation strings
+      - name: Patch ProfileMerger to accept kernel_major 4
         run: |
-          echo "=== Searching for 'Profile needs correction' ==="
-          grep -rn "Profile needs correction" . || echo "NOT FOUND"
-          
-          echo "=== Searching for 'needs correction' ==="
-          grep -rn "needs correction" . || echo "NOT FOUND"
-          
-          echo "=== Searching for 'kernel_major' in Kotlin/Java ==="
-          grep -rn "kernel_major" --include="*.kt" --include="*.java" . | head -n 20 || echo "NOT FOUND"
-          
-          echo "=== Searching for 'correct' in string resources ==="
-          find . -name "strings.xml" -exec grep -Hn "correct\|correction" {} \; || echo "NOT FOUND"
+          cd ghostlock-app
+          sed -i 's/in 5..6/in 4..6/g' profile-core/src/main/kotlin/com/ghostlock/app/data/profile/ProfileMerger.kt
+          echo "=== After patch ==="
+          grep -n "in 4..6" profile-core/src/main/kotlin/com/ghostlock/app/data/profile/ProfileMerger.kt
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Build APK
+        run: |
+          cd ghostlock-app
+          chmod +x gradlew
+          ./gradlew assembleRelease
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: ghostlock-patched
+          path: ghostlock-app/app/build/outputs/apk/release/*.apk
