@@ -1,4 +1,4 @@
-name: Extract GhostLock Profile v5
+name: Extract GhostLock Profile
 
 on:
   workflow_dispatch:
@@ -20,12 +20,6 @@ jobs:
         run: |
           git clone https://github.com/YuKongA/payload_extract_rs.git payload_extract_rs
 
-      - name: Diagnose version check
-        run: |
-          cd payload_extract_rs
-          echo "=== All matches for version checks ==="
-          grep -rn "needs a\|5\.x\|6\.x\|major\|release" src/ | head -n 100
-
       - name: Install dependencies
         run: |
           sudo apt-get update
@@ -34,7 +28,26 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Aggressive patch
+      - name: DIAGNOSE - Find version check location
+        run: |
+          echo "=== Search in ghostlock-app ==="
+          grep -rn "5\.x\|6\.x\|needs a" ghostlock-app/tools/extract_rs/src/ || echo "not in ghostlock-app"
+          echo ""
+          echo "=== Search in payload_extract_rs ==="
+          grep -rn "5\.x\|6\.x\|needs a" payload_extract_rs/src/ || echo "not in payload_extract_rs"
+
+      - name: Patch ghostlock-extract source
+        run: |
+          cd ghostlock-app/tools/extract_rs
+          find src -name "*.rs" -exec sed -i \
+            -e 's/needs a 5\.x\/6\.x release/needs a 4.19+ release/g' \
+            -e 's/needs a 5/needs a 4/g' \
+            -e 's/5\.x\/6\.x/4.19+/g' \
+            {} \;
+          echo "=== After patch in ghostlock-app ==="
+          grep -rn "needs a\|5\.x\|6\.x\|4\.19" src/ | head -n 20 || echo "no matches"
+
+      - name: Patch payload_extract_rs source
         run: |
           cd payload_extract_rs
           find src -name "*.rs" -exec sed -i \
@@ -45,36 +58,29 @@ jobs:
             -e 's/release_major < 5/release_major < 0/g' \
             -e 's/release_major < 6/release_major < 0/g' \
             {} \;
-          echo "=== After patch ==="
-          grep -rn "needs a\|5\.x\|6\.x\|major < \|major >= " src/ | head -n 50 || echo "ALL PATCHED"
+          echo "=== After patch in payload_extract_rs ==="
+          grep -rn "major < 5\|major >= 5\|major < 6\|major >= 6" src/ || echo "all patched"
 
       - name: Fix Cargo.toml for path dependency
         run: |
           cd ghostlock-app/tools/extract_rs
-          echo "=== Original Cargo.toml ==="
-          cat Cargo.toml
-          echo ""
-          # Replace the ENTIRE payload-extract line with a clean path dependency
           python3 << 'PYEOF'
           import re
           with open('Cargo.toml', 'r') as f:
               content = f.read()
-          
-          # Match: payload-extract = { ... } (entire line, any content)
           content = re.sub(
               r'^payload[-_]extract\s*=\s*\{[^}]*\}.*$',
               'payload-extract = { path = "../../../payload_extract_rs" }',
               content,
               flags=re.MULTILINE
           )
-          
           with open('Cargo.toml', 'w') as f:
               f.write(content)
           PYEOF
           echo "=== Patched Cargo.toml ==="
           cat Cargo.toml
 
-      - name: Build extractor with patched dependency
+      - name: Build extractor
         run: |
           cd ghostlock-app/tools/extract_rs
           cargo build --release
@@ -100,7 +106,7 @@ jobs:
           chmod +x "$BIN"
           cd boot_unpacked
           echo "=== Running patched extractor ==="
-          "$BIN" kernel_raw --kallsyms kallsyms.txt --phys 0x40080000 --format conf --out profile.conf 2>&1 || echo "PATCHED_STILL_FAILED"
+          "$BIN" kernel_raw --kallsyms kallsyms.txt --phys 0x40080000 --format conf --out profile.conf 2>&1 || true
           echo ""
           echo "=== Result ==="
           if [ -f profile.conf ]; then
@@ -108,11 +114,19 @@ jobs:
             cat profile.conf
           else
             echo "PROFILE STILL NOT CREATED"
+            echo "=== Trying --format json instead ==="
+            "$BIN" kernel_raw --kallsyms kallsyms.txt --phys 0x40080000 --format json --out profile.json 2>&1 || true
+            if [ -f profile.json ]; then
+              echo "=== JSON SUCCESS! ==="
+              cat profile.json
+            fi
           fi
 
       - name: Upload profile
         uses: actions/upload-artifact@v4
         with:
           name: ghostlock-profile
-          path: boot_unpacked/profile.conf
+          path: |
+            boot_unpacked/profile.conf
+            boot_unpacked/profile.json
           if-no-files-found: warn
