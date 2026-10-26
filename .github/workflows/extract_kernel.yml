@@ -24,8 +24,7 @@ jobs:
       - name: Unpack boot.img
         run: |
           git clone https://android.googlesource.com/platform/system/tools/mkbootimg
-          # מריצים את הסקריפט ישירות במקום להתקין אותו
-          PYTHONPATH=mkbootimg/python python3 mkbootimg/python/unpack_bootimg.py --boot_img boot_a.img --out boot_unpacked
+          PYTHONPATH=mkbootimg python3 mkbootimg/unpack_bootimg.py --boot_img boot_a.img --out boot_unpacked
 
       - name: Find and extract kernel
         run: |
