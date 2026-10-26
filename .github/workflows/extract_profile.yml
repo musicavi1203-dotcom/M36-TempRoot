@@ -1,8 +1,8 @@
-name: find_validation_error
+name: get_real_profile
 on: [workflow_dispatch]
 
 jobs:
-  find_error:
+  get_profile:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout GhostLock
@@ -10,10 +10,14 @@ jobs:
         with:
           repository: YuKongA/ghostlock-app
           
-      - name: Search for validation throwing string
+      - name: Show real profile structure
         run: |
-          echo "=== Searching for kernel_profile_invalid usage ==="
-          grep -rn "kernel_profile_invalid" . || echo "NOT FOUND"
+          echo "=== List of built-in profiles ==="
+          ls -la app/src/main/assets/kernel_profiles/
           
-          echo "=== Searching for all 'require' statements in ProfileMerger ==="
-          grep -n "require" profile-core/src/main/kotlin/com/ghostlock/app/data/profile/ProfileMerger.kt
+          echo "=== Content of ONE real profile ==="
+          # מציג את הפרופיל הראשון שנמצא בתיקייה
+          cat app/src/main/assets/kernel_profiles/* | head -n 100
+          
+          echo "=== Defaults.md (if exists) ==="
+          find . -name "defaults.md" -exec cat {} \;
