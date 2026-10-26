@@ -1,11 +1,12 @@
-name: Extract GhostLock Profile
-
-on:
-  workflow_dispatch:
+name: extract
+on: [workflow_dispatch]
 
 jobs:
   extract:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
     steps:
       - name: Checkout M36-TempRoot repo
         uses: actions/checkout@v4
@@ -25,28 +26,29 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: SHOW main.rs around line 611
-        run: |
-          echo "=== Lines 570-650 of main.rs (the check is at 611) ==="
-          sed -n '570,650p' ghostlock-app/tools/extract_rs/src/main.rs
-
-      - name: NUCLEAR PATCH main.rs
+      - name: PRECISION PATCH main.rs
         run: |
           cd ghostlock-app/tools/extract_rs/src
-          # Replace the version check condition with one that always returns true (allow any version)
-          # We try many patterns
-          sed -i \
-            -e 's/if major < 5 || major > 6/if false/g' \
-            -e 's/if major < 5/if false/g' \
-            -e 's/if major > 6/if false/g' \
-            -e 's/if release_major < 5 || release_major > 6/if false/g' \
-            -e 's/if !(5..=6).contains(&major)/if false/g' \
-            -e 's/if !matches!(major, 5..=6)/if false/g' \
-            -e 's/if kernel_major < 5 || kernel_major > 6/if false/g' \
-            -e 's/if !(major >= 5 \&\& major <= 6)/if false/g' \
-            main.rs
-          echo "=== After patch, lines 605-620 ==="
-          sed -n '605,620p' main.rs
+          python3 - << 'PYEOF'
+          with open('main.rs', 'r') as f:
+              content = f.read()
+          
+          # החלפת בדיקת הגרסה המדויקת ב-false
+          old_check = 'if major != Some(5) && major != Some(6) {'
+          new_check = 'if false { // Patched to bypass version check for 4.19'
+          
+          if old_check in content:
+              content = content.replace(old_check, new_check)
+              print("SUCCESS: Version check patched!")
+          else:
+              print("ERROR: Version check string not found!")
+              
+          with open('main.rs', 'w') as f:
+              f.write(content)
+          PYEOF
+          
+          echo "=== After patch, checking lines 609-614 ==="
+          sed -n '609,614p' main.rs
 
       - name: Patch payload_extract_rs too (just in case)
         run: |
@@ -73,7 +75,7 @@ jobs:
       - name: Build extractor
         run: cd ghostlock-app/tools/extract_rs && cargo build --release
 
-      - name: Prepare boot.img + kallsyms
+      - name: Prepare boot.img + kallsyms.txt
         run: |
           unzip boot_a.zip
           git clone https://android.googlesource.com/platform/system/tools/mkbootimg
@@ -90,19 +92,27 @@ jobs:
           BIN=$(realpath $(find ghostlock-app -name "ghostlock-extract" -type f -path "*/release/*" | head -n1))
           chmod +x "$BIN"
           cd boot_unpacked
+          
           echo "=== Attempt conf ==="
           "$BIN" kernel_raw --kallsyms kallsyms.txt --phys 0x40080000 --format conf --out profile.conf 2>&1 || true
-          [ -f profile.conf ] && echo "=== SUCCESS! ===" && cat profile.conf
-          if [ ! -f profile.conf ]; then
+          
+          if [ -f profile.conf ]; then
+            echo "=== SUCCESS! ===" 
+            cat profile.conf
+          else
             echo "=== Attempt json ==="
             "$BIN" kernel_raw --kallsyms kallsyms.txt --phys 0x40080000 --format json --out profile.json 2>&1 || true
-            [ -f profile.json ] && echo "=== JSON SUCCESS ===" && cat profile.json
+            if [ -f profile.json ]; then
+              echo "=== JSON SUCCESS ==="
+              cat profile.json
+            fi
           fi
 
-      - name: Upload
+      - name: Upload profile if exists
         uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: ghostlock-profile
+          name: extracted-profile
           path: |
             boot_unpacked/profile.conf
             boot_unpacked/profile.json
