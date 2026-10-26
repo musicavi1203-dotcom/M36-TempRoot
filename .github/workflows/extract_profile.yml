@@ -23,10 +23,20 @@ jobs:
           rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android i686-linux-android
           cargo install cargo-ndk
 
+      - name: Setup Android NDK
+        uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          ndk-version: r27c
+          add-to-path: true
+
       - name: Build ghostlock-extract (Rust)
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
         run: |
           cd ghostlock-app/tools/extract_rs
-          cargo build --release --target aarch64-linux-android
+          # שימוש בשם ה-target של אנדרואיד (arm64-v8a) שה-cargo-ndk מצפה לו
+          cargo ndk -t arm64-v8a build --release
 
       - name: Setup Java
         uses: actions/setup-java@v4
