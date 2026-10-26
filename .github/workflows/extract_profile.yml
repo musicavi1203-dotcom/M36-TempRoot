@@ -1,8 +1,8 @@
-name: get_validation_func
+name: find_perf
 on: [push, workflow_dispatch]
 
 jobs:
-  get_code:
+  find:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout GhostLock
@@ -10,7 +10,11 @@ jobs:
         with:
           repository: YuKongA/ghostlock-app
           
-      - name: Print validateProfileFields function
+      - name: Search for perf_event in C++ source
         run: |
-          echo "=== The exact validation code ==="
-          sed -n '87,160p' app/src/main/kotlin/com/ghostlock/app/data/AndroidProfileConfigController.kt
+          echo "=== Search for perf_event_open ==="
+          grep -rn "perf_event_open" core/ || echo "NOT FOUND"
+          
+          echo ""
+          echo "=== Search for perf_event (struct/calls) ==="
+          grep -rn "perf_event" core/ | head -n 30
