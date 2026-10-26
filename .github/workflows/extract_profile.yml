@@ -7,6 +7,9 @@ jobs:
   extract:
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout M36-TempRoot repo (contains boot_a.zip)
+        uses: actions/checkout@v4
+
       - name: Checkout GhostLock repository
         uses: actions/checkout@v4
         with:
@@ -21,16 +24,15 @@ jobs:
           cd ghostlock-app/tools/extract_rs
           cargo build --release
 
-      - name: Download boot.img from Release
+      - name: Extract boot.img from ZIP
         run: |
-          wget https://github.com/musicavi1203-dotcom/M36-TempRoot/releases/download/v1.0/boot.zip -O boot.zip
-          unzip boot.zip
+          unzip boot_a.zip
           ls -la boot_a.img
 
       - name: Run extractor
         run: |
           cd ghostlock-app/tools/extract_rs
-          cargo run --release -- ../../../boot_a.img --format conf --out profile.conf
+          ./target/release/ghostlock-extract ../../../boot_a.img --format conf --out profile.conf
           ls -la profile.conf
           cat profile.conf
 
