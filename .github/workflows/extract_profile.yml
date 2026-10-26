@@ -86,6 +86,9 @@ jobs:
           vmlinux-to-elf kernel_raw kernel.elf
           nm kernel.elf | sort > kallsyms.txt
           wc -l kallsyms.txt
+          
+          echo "=== SEARCHING FOR SELINUX OFFSETS ==="
+          grep -i "selinux" kallsyms.txt | head -n 50
 
       - name: Run extractor
         run: |
