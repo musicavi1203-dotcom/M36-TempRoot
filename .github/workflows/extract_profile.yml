@@ -1,8 +1,8 @@
-name: find_invalid_paths
+name: get_validation_func
 on: [push, workflow_dispatch]
 
 jobs:
-  find:
+  get_code:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout GhostLock
@@ -10,19 +10,7 @@ jobs:
         with:
           repository: YuKongA/ghostlock-app
           
-      - name: Search profileInvalidPaths
+      - name: Print validateProfileFields function
         run: |
-          echo "=== Where is profileInvalidPaths populated? ==="
-          grep -rn "profileInvalidPaths" --include="*.kt" .
-          
-          echo ""
-          echo "=== Validation functions ==="
-          grep -rn "invalidPaths\|profileInvalid\|validateProfile" --include="*.kt" . | head -n 30
-          
-          echo ""
-          echo "=== NativeProfile.kt lines 30-80 ==="
-          sed -n '30,80p' profile-core/src/main/kotlin/com/ghostlock/app/data/NativeProfile.kt
-          
-          echo ""
-          echo "=== Search for validate() or invalid field logic ==="
-          grep -rn "invalid\|Invalid" profile-core/src/main/kotlin/com/ghostlock/app/data/ | head -n 30
+          echo "=== The exact validation code ==="
+          sed -n '87,160p' app/src/main/kotlin/com/ghostlock/app/data/AndroidProfileConfigController.kt
