@@ -1,4 +1,4 @@
-name: Extract GhostLock Profile v2
+name: Extract GhostLock Profile v3
 
 on:
   workflow_dispatch:
@@ -24,7 +24,19 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Build extractor
+      - name: Patch extractor to allow 4.19
+        run: |
+          cd ghostlock-app/tools/extract_rs
+          echo "=== Searching for version check ==="
+          grep -rn "needs a 5" src/ || true
+          grep -rn "5.x/6.x" src/ || true
+          grep -rn "release" src/ | head -n 20 || true
+          # Try to find and comment out the version check
+          find src -name "*.rs" -exec sed -i 's/needs a 5\.x\/6\.x release/needs a 4.19+ release/g' {} \;
+          echo "=== After patch ==="
+          grep -rn "needs a 4" src/ || true
+
+      - name: Build extractor (patched)
         run: |
           cd ghostlock-app/tools/extract_rs
           cargo build --release
@@ -34,49 +46,36 @@ jobs:
           unzip boot_a.zip
           ls -la boot_a.img
 
-      - name: Unpack boot.img manually (mkbootimg)
+      - name: Unpack boot.img
         run: |
           git clone https://android.googlesource.com/platform/system/tools/mkbootimg
           PYTHONPATH=mkbootimg python3 mkbootimg/unpack_bootimg.py --boot_img boot_a.img --out boot_unpacked
-          echo "=== Contents of boot_unpacked ==="
-          ls -la boot_unpacked/
 
-      - name: Decompress kernel properly
+      - name: Decompress kernel
         run: |
           cd boot_unpacked
-          FILETYPE=$(file -b kernel)
-          echo "Kernel type: $FILETYPE"
-          
-          if echo "$FILETYPE" | grep -qi "gzip"; then
-            echo "Gzip detected, decompressing..."
-            cp kernel kernel_raw.gz
-            gunzip kernel_raw.gz
-          elif echo "$FILETYPE" | grep -qi "ARM64\|aarch64"; then
-            echo "Already raw ARM64 Image"
-            cp kernel kernel_raw
-          else
-            echo "Unknown format, copying as-is"
-            cp kernel kernel_raw
-          fi
-          
-          echo "=== kernel_raw after decompress ==="
+          cp kernel kernel_raw.gz
+          gunzip kernel_raw.gz
           ls -la kernel_raw
-          file kernel_raw
 
-      - name: Create kallsyms.txt from ELF
+      - name: Create kallsyms.txt
         run: |
           pip3 install vmlinux-to-elf
           cd boot_unpacked
-          echo "=== Building ELF from kernel_raw ==="
           vmlinux-to-elf kernel_raw kernel.elf
-          echo "=== Extracting symbols with nm ==="
           nm kernel.elf | sort > kallsyms.txt
           echo "kallsyms.txt lines: $(wc -l < kallsyms.txt)"
-          head -n 5 kallsyms.txt
 
-      - name: Try extractor with --kallsyms
+      - name: Create fake iomem
         run: |
-          # Convert BIN to absolute path before changing directory
+          cat > /tmp/iomem.txt << 'EOF'
+          00000000-00000000 : kernel_phys
+          40000000-4007ffff : kernel_phys_load
+          EOF
+          cat /tmp/iomem.txt
+
+      - name: Try extractor - MULTIPLE APPROACHES
+        run: |
           BIN=$(find ghostlock-app -name "ghostlock-extract" -type f 2>/dev/null | head -n1)
           BIN=$(realpath "$BIN")
           echo "Found binary at: $BIN"
@@ -84,31 +83,42 @@ jobs:
           
           cd boot_unpacked
           
-          echo "=== Attempt 1: --kallsyms + --phys 0x40080000 ==="
-          "$BIN" kernel_raw --kallsyms kallsyms.txt --phys 0x40080000 --format conf --out profile.conf 2>&1 || echo "FAILED_1"
+          echo "=== Approach A: --analysis to understand what extractor computes ==="
+          "$BIN" kernel_raw --kallsyms kallsyms.txt --analysis 2>&1 || true
           
-          if [ ! -f profile.conf ]; then
-            echo "=== Attempt 2: --kallsyms only ==="
-            "$BIN" kernel_raw --kallsyms kallsyms.txt --format conf --out profile.conf 2>&1 || echo "FAILED_2"
-          fi
+          echo ""
+          echo "=== Approach B: --format json (maybe check is only for conf) ==="
+          "$BIN" kernel_raw --kallsyms kallsyms.txt --phys 0x40080000 --format json --out profile.json 2>&1 || echo "FAILED_JSON"
           
-          if [ ! -f profile.conf ]; then
-            echo "=== Attempt 3: --kallsyms + --phys 1074266112 (decimal) ==="
-            "$BIN" kernel_raw --kallsyms kallsyms.txt --phys 1074266112 --format conf --out profile.conf 2>&1 || echo "FAILED_3"
-          fi
+          echo ""
+          echo "=== Approach C: --format text ==="
+          "$BIN" kernel_raw --kallsyms kallsyms.txt --phys 0x40080000 --format text --out profile.txt 2>&1 || echo "FAILED_TEXT"
           
-          echo "=== Result ==="
-          if [ -f profile.conf ]; then
-            echo "=== SUCCESS! Profile content: ==="
-            cat profile.conf
-          else
-            echo "PROFILE STILL NOT CREATED"
+          echo ""
+          echo "=== Approach D: --format conf with --allow-missing ==="
+          "$BIN" kernel_raw --kallsyms kallsyms.txt --phys 0x40080000 --format conf --allow-missing --out profile.conf 2>&1 || echo "FAILED_ALLOW_MISSING"
+          
+          echo ""
+          echo "=== Results ==="
+          for f in profile.json profile.txt profile.conf; do
+            if [ -f "$f" ]; then
+              echo "=== $f exists! ==="
+              cat "$f"
+              echo ""
+            fi
+          done
+          
+          if [ ! -f profile.conf ] && [ ! -f profile.json ] && [ ! -f profile.txt ]; then
+            echo "NOTHING CREATED"
             exit 1
           fi
 
-      - name: Upload profile (if created)
+      - name: Upload any profiles
         uses: actions/upload-artifact@v4
         with:
-          name: ghostlock-profile
-          path: boot_unpacked/profile.conf
+          name: ghostlock-profiles
+          path: |
+            boot_unpacked/profile.conf
+            boot_unpacked/profile.json
+            boot_unpacked/profile.txt
           if-no-files-found: warn
