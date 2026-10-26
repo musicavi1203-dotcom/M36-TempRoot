@@ -10,6 +10,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Extract boot.img from ZIP
+        run: |
+          # כאן שינינו את השם של ה-ZIP
+          unzip boot_a.zip
+          # כאן שינינו את השם של קובץ התמונה
+          ls -la boot_a.img
+
       - name: Install dependencies
         run: |
           sudo apt-get update
@@ -18,20 +25,16 @@ jobs:
 
       - name: Unpack boot.img
         run: |
-          # Download unpack_bootimg from AOSP or use a prebuilt tool
-          # For simplicity, we'll use a simple python script or magiskboot if available
-          # Let's use the official unpack_bootimg from Google
           git clone https://android.googlesource.com/platform/system/tools/mkbootimg
           cd mkbootimg
           python3 -m pip install .
           cd ..
-          unpack_bootimg --boot_img boot.img --out boot_unpacked
+          # כאן שינינו את השם של הקובץ שמחלצים
+          unpack_bootimg --boot_img boot_a.img --out boot_unpacked
 
       - name: Find and extract kernel
         run: |
-          # The kernel is usually named 'kernel' or 'Image.gz' or 'zImage'
           ls -la boot_unpacked/
-          # Try to find the kernel file
           if [ -f boot_unpacked/kernel ]; then
             cp boot_unpacked/kernel kernel_raw
           elif [ -f boot_unpacked/Image.gz ]; then
@@ -42,7 +45,6 @@ jobs:
           else
             echo "Kernel not found in standard names. Listing all files:"
             find boot_unpacked -type f -size +1M
-            # Fallback: try to find the largest file
             find boot_unpacked -type f -size +1M -exec cp {} kernel_raw \;
           fi
           ls -la kernel_raw
@@ -54,8 +56,6 @@ jobs:
 
       - name: Extract offsets
         run: |
-          # This is a placeholder. We will need a script that extracts specific offsets
-          # For now, let's just get the symbols related to credentials
           readelf -s kernel.elf | grep -E "init_cred|init_task|commit_creds|prepare_kernel_cred" > offsets.txt
           cat offsets.txt
 
