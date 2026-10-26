@@ -1,116 +1,25 @@
-name: extract
+name: find_validation
 on: [workflow_dispatch]
 
 jobs:
-  extract:
+  find_error:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-
     steps:
-      - name: Checkout M36-TempRoot repo
-        uses: actions/checkout@v4
-
-      - name: Checkout GhostLock repository
+      - name: Checkout GhostLock
         uses: actions/checkout@v4
         with:
           repository: YuKongA/ghostlock-app
-          path: ghostlock-app
 
-      - name: Clone payload_extract_rs manually
-        run: git clone https://github.com/YuKongA/payload_extract_rs.git payload_extract_rs
-
-      - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y python3 python3-pip git build-essential
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: PRECISION PATCH main.rs
+      - name: Search for validation strings
         run: |
-          cd ghostlock-app/tools/extract_rs/src
-          python3 - << 'PYEOF'
-          with open('main.rs', 'r') as f:
-              content = f.read()
+          echo "=== Searching for 'Profile needs correction' ==="
+          grep -rn "Profile needs correction" . || echo "NOT FOUND"
           
-          old_check = 'if major != Some(5) && major != Some(6) {'
-          new_check = 'if false { // Patched to bypass version check for 4.19'
+          echo "=== Searching for 'needs correction' ==="
+          grep -rn "needs correction" . || echo "NOT FOUND"
           
-          if old_check in content:
-              content = content.replace(old_check, new_check)
-              print("SUCCESS: Version check patched!")
-          else:
-              print("ERROR: Version check string not found!")
-              
-          with open('main.rs', 'w') as f:
-              f.write(content)
-          PYEOF
+          echo "=== Searching for 'kernel_major' in Kotlin/Java ==="
+          grep -rn "kernel_major" --include="*.kt" --include="*.java" . | head -n 20 || echo "NOT FOUND"
           
-          echo "=== After patch, checking lines 609-614 ==="
-          sed -n '609,614p' main.rs
-
-      - name: Patch payload_extract_rs too (just in case)
-        run: |
-          cd payload_extract_rs/src
-          find . -name "*.rs" -exec sed -i \
-            -e 's/major < 5/major < 0/g' \
-            -e 's/major < 6/major < 0/g' \
-            -e 's/major >= 5/major >= 0/g' \
-            {} \;
-
-      - name: Fix Cargo.toml
-        run: |
-          cd ghostlock-app/tools/extract_rs
-          python3 << 'PYEOF'
-          import re
-          with open('Cargo.toml') as f: c = f.read()
-          c = re.sub(r'^payload[-_]extract\s*=\s*\{[^}]*\}.*$',
-                     'payload-extract = { path = "../../../payload_extract_rs" }',
-                     c, flags=re.MULTILINE)
-          with open('Cargo.toml','w') as f: f.write(c)
-          PYEOF
-          cat Cargo.toml
-
-      - name: Build extractor
-        run: cd ghostlock-app/tools/extract_rs && cargo build --release
-
-      - name: Prepare boot.img + kallsyms.txt
-        run: |
-          unzip boot_a.zip
-          git clone https://android.googlesource.com/platform/system/tools/mkbootimg
-          PYTHONPATH=mkbootimg python3 mkbootimg/unpack_bootimg.py --boot_img boot_a.img --out boot_unpacked
-          cd boot_unpacked
-          cp kernel kernel_raw.gz && gunzip kernel_raw.gz
-          pip3 install vmlinux-to-elf
-          vmlinux-to-elf kernel_raw kernel.elf
-          nm kernel.elf | sort > kallsyms.txt
-          wc -l kallsyms.txt
-          
-          echo "=== SEARCHING FOR DATA SYMBOLS ==="
-          grep -i "blob_sizes" kallsyms.txt || echo "blob_sizes NOT FOUND"
-          grep -i "selinux_state" kallsyms.txt || echo "selinux_state NOT FOUND"
-          grep -E " [DdBb] " kallsyms.txt | head -n 20 || echo "NO DATA SYMBOLS FOUND"
-
-      - name: Run extractor
-        run: |
-          BIN=$(realpath $(find ghostlock-app -name "ghostlock-extract" -type f -path "*/release/*" | head -n1))
-          chmod +x "$BIN"
-          cd boot_unpacked
-          
-          echo "=== Attempt conf ==="
-          "$BIN" kernel_raw --kallsyms kallsyms.txt --phys 0x40080000 --format conf --out profile.conf 2>&1 || true
-          
-          if [ -f profile.conf ]; then
-            echo "=== SUCCESS! ===" 
-            cat profile.conf
-          fi
-
-      - name: Upload profile if exists
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: extracted-profile
-          path: |
-            boot_unpacked/profile.conf
-            boot_unpacked/profile.json
-          if-no-files-found: warn
+          echo "=== Searching for 'correct' in string resources ==="
+          find . -name "strings.xml" -exec grep -Hn "correct\|correction" {} \; || echo "NOT FOUND"
