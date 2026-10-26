@@ -62,29 +62,42 @@ jobs:
           echo "=== kernel_raw after decompress ==="
           ls -la kernel_raw
           file kernel_raw
-          hexdump -C kernel_raw | head -n 2
 
-      - name: Try extractor on decompressed kernel
+      - name: Create kallsyms.txt from ELF
+        run: |
+          pip3 install vmlinux-to-elf
+          cd boot_unpacked
+          echo "=== Building ELF from kernel_raw ==="
+          vmlinux-to-elf kernel_raw kernel.elf
+          echo "=== Extracting symbols with nm ==="
+          nm kernel.elf | sort > kallsyms.txt
+          echo "kallsyms.txt lines: $(wc -l < kallsyms.txt)"
+          head -n 5 kallsyms.txt
+
+      - name: Try extractor with --kallsyms
         run: |
           BIN=$(find ghostlock-app -name "ghostlock-extract" -type f 2>/dev/null | head -n1)
           echo "Found binary at: $BIN"
           chmod +x "$BIN"
           
-          echo "=== Attempting extraction on decompressed kernel ==="
-          "$BIN" boot_unpacked/kernel_raw --format conf --out profile.conf 2>&1 || echo "EXTRACTOR_FAILED_RAW"
+          cd boot_unpacked
+          
+          echo "=== Attempt 1: --kallsyms + --phys 0x40080000 ==="
+          "$BIN" kernel_raw --kallsyms kallsyms.txt --phys 0x40080000 --format conf --out profile.conf 2>&1 || echo "FAILED_1"
           
           if [ ! -f profile.conf ]; then
-            echo "=== Trying with explicit format ==="
-            "$BIN" boot_unpacked/kernel_raw --out profile.conf 2>&1 || echo "EXTRACTOR_FAILED_NOFORMAT"
+            echo "=== Attempt 2: --kallsyms only ==="
+            "$BIN" kernel_raw --kallsyms kallsyms.txt --format conf --out profile.conf 2>&1 || echo "FAILED_2"
           fi
           
           if [ ! -f profile.conf ]; then
-            echo "=== Showing help to understand options ==="
-            "$BIN" --help 2>&1 || true
+            echo "=== Attempt 3: --kallsyms + --phys 1074266112 (decimal) ==="
+            "$BIN" kernel_raw --kallsyms kallsyms.txt --phys 1074266112 --format conf --out profile.conf 2>&1 || echo "FAILED_3"
           fi
           
           echo "=== Result ==="
           if [ -f profile.conf ]; then
+            echo "=== SUCCESS! Profile content: ==="
             cat profile.conf
           else
             echo "PROFILE STILL NOT CREATED"
@@ -95,5 +108,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ghostlock-profile
-          path: profile.conf
+          path: boot_unpacked/profile.conf
           if-no-files-found: warn
