@@ -29,20 +29,32 @@ jobs:
           unzip boot_a.zip
           ls -la boot_a.img
 
+      - name: Debug - find the binary
+        run: |
+          echo "=== Searching for ghostlock-extract ==="
+          find . -name "ghostlock-extract" -type f 2>/dev/null
+          echo "=== Looking in target/release ==="
+          find . -type d -name "release" 2>/dev/null
+          echo "=== Full extract_rs dir ==="
+          ls -la ghostlock-app/tools/extract_rs/
+
       - name: Run extractor
         run: |
-          cd ghostlock-app/tools/extract_rs
-          # מחפשים את הבינארי אוטומטית
-          BIN=$(find target/release -maxdepth 1 -type f -executable | head -n1)
-          echo "Found binary: $BIN"
-          "$BIN" ../../../boot_a.img --format conf --out profile.conf
+          BIN=$(find . -name "ghostlock-extract" -type f 2>/dev/null | head -n1)
+          if [ -z "$BIN" ]; then
+            echo "ERROR: Binary not found!"
+            exit 1
+          fi
+          echo "Found binary at: $BIN"
+          chmod +x "$BIN"
+          "$BIN" boot_a.img --format conf --out profile.conf
+          echo "=== Profile generated ==="
           ls -la profile.conf
-          echo "=== Profile contents ==="
           cat profile.conf
 
       - name: Upload profile
         uses: actions/upload-artifact@v4
         with:
           name: ghostlock-profile
-          path: ghostlock-app/tools/extract_rs/profile.conf
+          path: profile.conf
           if-no-files-found: error
