@@ -1,4 +1,4 @@
-name: Extract GhostLock Profile v3
+name: Extract GhostLock Profile v4
 
 on:
   workflow_dispatch:
@@ -16,6 +16,19 @@ jobs:
           repository: YuKongA/ghostlock-app
           path: ghostlock-app
 
+      - name: Clone payload_extract_rs manually
+        run: |
+          git clone https://github.com/YuKongA/payload_extract_rs.git payload_extract_rs
+
+      - name: Diagnose version check
+        run: |
+          cd payload_extract_rs
+          echo "=== Files in src/ ==="
+          find src -name "*.rs" -type f
+          echo ""
+          echo "=== All matches for version checks ==="
+          grep -rn "needs a\|5\.x\|6\.x\|major\|release" src/ | head -n 200
+
       - name: Install dependencies
         run: |
           sudo apt-get update
@@ -24,101 +37,75 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Patch extractor to allow 4.19
+      - name: Aggressive patch
+        run: |
+          cd payload_extract_rs
+          # Replace many patterns for version check
+          find src -name "*.rs" -exec sed -i \
+            -e 's/major < 5/major < 0/g' \
+            -e 's/major < 6/major < 0/g' \
+            -e 's/major >= 5/major >= 0/g' \
+            -e 's/major >= 6/major >= 0/g' \
+            -e 's/major == 5 || major == 6/true/g' \
+            -e 's/5 | 6 =>/0..=99 =>/g' \
+            -e 's/5..=6 =>/0..=99 =>/g' \
+            -e 's/release_major < 5/release_major < 0/g' \
+            -e 's/release_major < 6/release_major < 0/g' \
+            {} \;
+          
+          echo "=== After patch ==="
+          grep -rn "needs a\|5\.x\|6\.x\|major < \|major >= " src/ | head -n 50 || echo "ALL PATCHED"
+
+      - name: Update ghostlock-extract Cargo.toml
         run: |
           cd ghostlock-app/tools/extract_rs
-          echo "=== Searching for version check ==="
-          grep -rn "needs a 5" src/ || true
-          grep -rn "5.x/6.x" src/ || true
-          grep -rn "release" src/ | head -n 20 || true
-          # Try to find and comment out the version check
-          find src -name "*.rs" -exec sed -i 's/needs a 5\.x\/6\.x release/needs a 4.19+ release/g' {} \;
-          echo "=== After patch ==="
-          grep -rn "needs a 4" src/ || true
+          echo "=== Original Cargo.toml ==="
+          cat Cargo.toml
+          echo ""
+          sed -i 's|git = "https://github.com/YuKongA/payload_extract_rs"[^}]*|path = "../../../payload_extract_rs"|g' Cargo.toml
+          echo ""
+          echo "=== Patched Cargo.toml ==="
+          cat Cargo.toml
 
-      - name: Build extractor (patched)
+      - name: Build extractor with patched dependency
         run: |
           cd ghostlock-app/tools/extract_rs
           cargo build --release
 
-      - name: Extract boot.img from ZIP
+      - name: Extract and prepare boot.img
         run: |
           unzip boot_a.zip
-          ls -la boot_a.img
-
-      - name: Unpack boot.img
-        run: |
           git clone https://android.googlesource.com/platform/system/tools/mkbootimg
           PYTHONPATH=mkbootimg python3 mkbootimg/unpack_bootimg.py --boot_img boot_a.img --out boot_unpacked
-
-      - name: Decompress kernel
-        run: |
           cd boot_unpacked
           cp kernel kernel_raw.gz
           gunzip kernel_raw.gz
-          ls -la kernel_raw
-
-      - name: Create kallsyms.txt
-        run: |
           pip3 install vmlinux-to-elf
-          cd boot_unpacked
           vmlinux-to-elf kernel_raw kernel.elf
           nm kernel.elf | sort > kallsyms.txt
           echo "kallsyms.txt lines: $(wc -l < kallsyms.txt)"
 
-      - name: Create fake iomem
+      - name: Run patched extractor
         run: |
-          cat > /tmp/iomem.txt << 'EOF'
-          00000000-00000000 : kernel_phys
-          40000000-4007ffff : kernel_phys_load
-          EOF
-          cat /tmp/iomem.txt
-
-      - name: Try extractor - MULTIPLE APPROACHES
-        run: |
-          BIN=$(find ghostlock-app -name "ghostlock-extract" -type f 2>/dev/null | head -n1)
+          BIN=$(find ghostlock-app -name "ghostlock-extract" -type f -path "*/release/*" 2>/dev/null | head -n1)
           BIN=$(realpath "$BIN")
           echo "Found binary at: $BIN"
           chmod +x "$BIN"
-          
           cd boot_unpacked
-          
-          echo "=== Approach A: --analysis to understand what extractor computes ==="
-          "$BIN" kernel_raw --kallsyms kallsyms.txt --analysis 2>&1 || true
-          
+          echo "=== Running patched extractor ==="
+          "$BIN" kernel_raw --kallsyms kallsyms.txt --phys 0x40080000 --format conf --out profile.conf 2>&1 || echo "PATCHED_STILL_FAILED"
           echo ""
-          echo "=== Approach B: --format json (maybe check is only for conf) ==="
-          "$BIN" kernel_raw --kallsyms kallsyms.txt --phys 0x40080000 --format json --out profile.json 2>&1 || echo "FAILED_JSON"
-          
-          echo ""
-          echo "=== Approach C: --format text ==="
-          "$BIN" kernel_raw --kallsyms kallsyms.txt --phys 0x40080000 --format text --out profile.txt 2>&1 || echo "FAILED_TEXT"
-          
-          echo ""
-          echo "=== Approach D: --format conf with --allow-missing ==="
-          "$BIN" kernel_raw --kallsyms kallsyms.txt --phys 0x40080000 --format conf --allow-missing --out profile.conf 2>&1 || echo "FAILED_ALLOW_MISSING"
-          
-          echo ""
-          echo "=== Results ==="
-          for f in profile.json profile.txt profile.conf; do
-            if [ -f "$f" ]; then
-              echo "=== $f exists! ==="
-              cat "$f"
-              echo ""
-            fi
-          done
-          
-          if [ ! -f profile.conf ] && [ ! -f profile.json ] && [ ! -f profile.txt ]; then
-            echo "NOTHING CREATED"
-            exit 1
+          echo "=== Result ==="
+          if [ -f profile.conf ]; then
+            echo "=== SUCCESS! ==="
+            cat profile.conf
+          else
+            echo "PROFILE STILL NOT CREATED"
           fi
 
-      - name: Upload any profiles
+      - name: Upload profile
         uses: actions/upload-artifact@v4
         with:
-          name: ghostlock-profiles
-          path: |
-            boot_unpacked/profile.conf
-            boot_unpacked/profile.json
-            boot_unpacked/profile.txt
+          name: ghostlock-profile
+          path: boot_unpacked/profile.conf
           if-no-files-found: warn
