@@ -15,17 +15,12 @@ jobs:
         run: |
           cd ghostlock-app
           sed -i 's/in 5..6/in 4..6/g' profile-core/src/main/kotlin/com/ghostlock/app/data/profile/ProfileMerger.kt
-          echo "=== After Kotlin patch ==="
-          grep -n "in 4..6" profile-core/src/main/kotlin/com/ghostlock/app/data/profile/ProfileMerger.kt
 
       - name: Patch C++ PAGE_SIZE macro conflict
         run: |
           cd ghostlock-app
           FILE=$(find . -name "constants.hpp" | grep "core/kernel/constants.hpp" | head -n 1)
-          echo "Patching C++ file: $FILE"
           sed -i 's/    inline constexpr unsigned long PAGE_SIZE = 1UL << PAGE_SHIFT;/#undef PAGE_SIZE\n    inline constexpr unsigned long PAGE_SIZE = 1UL << PAGE_SHIFT;/' "$FILE"
-          echo "=== After C++ patch ==="
-          grep -A 2 -B 2 "PAGE_SIZE" "$FILE"
 
       - name: Install Rust targets and cargo-ndk
         run: |
@@ -55,31 +50,26 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
 
-      - name: Clean Gradle Cache
-        run: |
-          cd ghostlock-app
-          rm -rf ~/.gradle/caches
-          rm -rf build
-          ./gradlew clean
-
-      - name: Build APK
+      - name: Build APK (Both Debug and Release)
         env:
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
         run: |
           cd ghostlock-app
           chmod +x gradlew
-          ./gradlew assembleRelease --stacktrace
+          ./gradlew assemble --stacktrace
 
-      # --- שלב חדש שמוצא את ה-APK ---
-      - name: Find APK
+      - name: Find and Copy APK
         run: |
-          echo "Looking for APK files..."
-          find ghostlock-app -name "*.apk"
-          
+          echo "Searching for all APK files..."
+          # מחפש כל קובץ APK ומעתיק אותו לתיקייה הראשית
+          find ghostlock-app -name "*.apk" -exec cp {} ./ \;
+          echo "Files in root directory:"
+          ls -la *.apk || echo "No APK found in root"
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: ghostlock-patched
-          # חיפוש APK בכל תת-תיקייה של outputs
-          path: ghostlock-app/**/build/outputs/apk/**/*.apk
+          name: ghostlock-apk
+          # מעלה את כל הקבצים עם סיומת .apk שנמצאים בתיקייה הראשית
+          path: "*.apk"
           if-no-files-found: error
