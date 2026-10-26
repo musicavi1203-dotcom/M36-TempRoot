@@ -1,8 +1,8 @@
-name: find_perf_path
+name: get_perf_code
 on: [push, workflow_dispatch]
 
 jobs:
-  find:
+  get_code:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout GhostLock
@@ -10,19 +10,11 @@ jobs:
         with:
           repository: YuKongA/ghostlock-app
           
-      - name: Find where perf_event_open is
+      - name: Print C++ code for perf
         run: |
-          echo "=== Find main.cpp (to know the C++ root) ==="
-          find . -name "main.cpp"
+          echo "=== ops.cpp lines 425-465 ==="
+          sed -n '425,465p' src/core/attack/ops.cpp
           
           echo ""
-          echo "=== Find files with perf_event_open ==="
-          grep -rn "perf_event_open" . --include="*.cpp" --include="*.h" --include="*.hpp" || echo "NOT FOUND"
-          
-          echo ""
-          echo "=== Find files with perf_find_task ==="
-          grep -rn "perf_find_task" . --include="*.cpp" --include="*.h" --include="*.hpp" || echo "NOT FOUND"
-          
-          echo ""
-          echo "=== Find files with perf leak logic ==="
-          grep -rn "perf leak did not reproduce" . || echo "NOT FOUND"
+          echo "=== cve_2026_43499_backend.cpp lines 110-145 ==="
+          sed -n '110,145p' src/core/session/backend/cve_2026_43499_backend.cpp
