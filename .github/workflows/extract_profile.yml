@@ -51,7 +51,6 @@ jobs:
             echo "Gzip detected, decompressing..."
             cp kernel kernel_raw.gz
             gunzip kernel_raw.gz
-            mv kernel_raw kernel_raw
           elif echo "$FILETYPE" | grep -qi "ARM64\|aarch64"; then
             echo "Already raw ARM64 Image"
             cp kernel kernel_raw
