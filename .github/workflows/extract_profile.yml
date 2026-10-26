@@ -41,48 +41,54 @@ jobs:
           echo "=== Contents of boot_unpacked ==="
           ls -la boot_unpacked/
 
-      - name: Decompress kernel if needed
+      - name: Decompress kernel properly
         run: |
           cd boot_unpacked
-          if [ -f kernel.gz ]; then
-            gunzip kernel.gz
-            mv kernel kernel_raw
-          elif [ -f Image.gz ]; then
-            gunzip Image.gz
-            mv Image kernel_raw
-          elif [ -f kernel ]; then
-            mv kernel kernel_raw
+          FILETYPE=$(file -b kernel)
+          echo "Kernel type: $FILETYPE"
+          
+          if echo "$FILETYPE" | grep -qi "gzip"; then
+            echo "Gzip detected, decompressing..."
+            cp kernel kernel_raw.gz
+            gunzip kernel_raw.gz
+            mv kernel_raw kernel_raw
+          elif echo "$FILETYPE" | grep -qi "ARM64\|aarch64"; then
+            echo "Already raw ARM64 Image"
+            cp kernel kernel_raw
           else
-            # Try to find largest file
-            LARGEST=$(find . -type f -size +1M | head -n1)
-            cp "$LARGEST" kernel_raw
+            echo "Unknown format, copying as-is"
+            cp kernel kernel_raw
           fi
-          echo "=== kernel_raw size ==="
+          
+          echo "=== kernel_raw after decompress ==="
           ls -la kernel_raw
           file kernel_raw
+          hexdump -C kernel_raw | head -n 2
 
-      - name: Try extractor on raw kernel
+      - name: Try extractor on decompressed kernel
         run: |
           BIN=$(find ghostlock-app -name "ghostlock-extract" -type f 2>/dev/null | head -n1)
           echo "Found binary at: $BIN"
           chmod +x "$BIN"
-          echo "=== Attempting extraction on raw kernel ==="
-          "$BIN" boot_unpacked/kernel_raw --format conf --out profile.conf 2>&1 || echo "EXTRACTOR_FAILED_1"
+          
+          echo "=== Attempting extraction on decompressed kernel ==="
+          "$BIN" boot_unpacked/kernel_raw --format conf --out profile.conf 2>&1 || echo "EXTRACTOR_FAILED_RAW"
+          
           if [ ! -f profile.conf ]; then
-            echo "=== Trying with --kernel flag ==="
-            "$BIN" --kernel boot_unpacked/kernel_raw --format conf --out profile.conf 2>&1 || echo "EXTRACTOR_FAILED_2"
+            echo "=== Trying with explicit format ==="
+            "$BIN" boot_unpacked/kernel_raw --out profile.conf 2>&1 || echo "EXTRACTOR_FAILED_NOFORMAT"
           fi
+          
           if [ ! -f profile.conf ]; then
-            echo "=== Trying vmlinux-to-elf + extractor ==="
-            pip3 install vmlinux-to-elf
-            vmlinux-to-elf boot_unpacked/kernel_raw kernel.elf
-            "$BIN" kernel.elf --format conf --out profile.conf 2>&1 || echo "EXTRACTOR_FAILED_3"
+            echo "=== Showing help to understand options ==="
+            "$BIN" --help 2>&1 || true
           fi
+          
           echo "=== Result ==="
           if [ -f profile.conf ]; then
             cat profile.conf
           else
-            echo "PROFILE NOT CREATED"
+            echo "PROFILE STILL NOT CREATED"
             exit 1
           fi
 
