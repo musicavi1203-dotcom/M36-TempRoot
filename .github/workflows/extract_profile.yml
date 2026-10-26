@@ -1,5 +1,5 @@
 name: build_patched_apk
-on: [workflow_dispatch]
+on: [push, workflow_dispatch]
 
 jobs:
   build:
@@ -15,8 +15,18 @@ jobs:
         run: |
           cd ghostlock-app
           sed -i 's/in 5..6/in 4..6/g' profile-core/src/main/kotlin/com/ghostlock/app/data/profile/ProfileMerger.kt
-          echo "=== After patch ==="
+          echo "=== After Kotlin patch ==="
           grep -n "in 4..6" profile-core/src/main/kotlin/com/ghostlock/app/data/profile/ProfileMerger.kt
+
+      - name: Patch C++ PAGE_SIZE macro conflict
+        run: |
+          cd ghostlock-app
+          FILE=$(find . -name "constants.hpp" | grep "core/kernel/constants.hpp" | head -n 1)
+          echo "Patching C++ file: $FILE"
+          # הוספת #undef PAGE_SIZE לפני השורה שמגדירה את המשתנה
+          sed -i 's/    inline constexpr unsigned long PAGE_SIZE = 1UL << PAGE_SHIFT;/#undef PAGE_SIZE\n    inline constexpr unsigned long PAGE_SIZE = 1UL << PAGE_SHIFT;/' "$FILE"
+          echo "=== After C++ patch ==="
+          grep -A 2 -B 2 "PAGE_SIZE" "$FILE"
 
       - name: Install Rust targets and cargo-ndk
         run: |
