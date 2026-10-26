@@ -23,7 +23,6 @@ jobs:
           cd ghostlock-app
           FILE=$(find . -name "constants.hpp" | grep "core/kernel/constants.hpp" | head -n 1)
           echo "Patching C++ file: $FILE"
-          # הוספת #undef PAGE_SIZE לפני השורה שמגדירה את המשתנה
           sed -i 's/    inline constexpr unsigned long PAGE_SIZE = 1UL << PAGE_SHIFT;/#undef PAGE_SIZE\n    inline constexpr unsigned long PAGE_SIZE = 1UL << PAGE_SHIFT;/' "$FILE"
           echo "=== After C++ patch ==="
           grep -A 2 -B 2 "PAGE_SIZE" "$FILE"
@@ -71,8 +70,16 @@ jobs:
           chmod +x gradlew
           ./gradlew assembleRelease --stacktrace
 
+      # --- שלב חדש שמוצא את ה-APK ---
+      - name: Find APK
+        run: |
+          echo "Looking for APK files..."
+          find ghostlock-app -name "*.apk"
+          
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: ghostlock-patched
-          path: ghostlock-app/app/build/outputs/apk/release/*.apk
+          # חיפוש APK בכל תת-תיקייה של outputs
+          path: ghostlock-app/**/build/outputs/apk/**/*.apk
+          if-no-files-found: error
