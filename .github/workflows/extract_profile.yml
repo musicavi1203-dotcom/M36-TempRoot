@@ -33,7 +33,6 @@ jobs:
           with open('main.rs', 'r') as f:
               content = f.read()
           
-          # החלפת בדיקת הגרסה המדויקת ב-false
           old_check = 'if major != Some(5) && major != Some(6) {'
           new_check = 'if false { // Patched to bypass version check for 4.19'
           
@@ -87,8 +86,10 @@ jobs:
           nm kernel.elf | sort > kallsyms.txt
           wc -l kallsyms.txt
           
-          echo "=== SEARCHING FOR SELINUX OFFSETS ==="
-          grep -i "selinux" kallsyms.txt | head -n 50
+          echo "=== SEARCHING FOR DATA SYMBOLS ==="
+          grep -i "blob_sizes" kallsyms.txt || echo "blob_sizes NOT FOUND"
+          grep -i "selinux_state" kallsyms.txt || echo "selinux_state NOT FOUND"
+          grep -E " [DdBb] " kallsyms.txt | head -n 20 || echo "NO DATA SYMBOLS FOUND"
 
       - name: Run extractor
         run: |
@@ -102,13 +103,6 @@ jobs:
           if [ -f profile.conf ]; then
             echo "=== SUCCESS! ===" 
             cat profile.conf
-          else
-            echo "=== Attempt json ==="
-            "$BIN" kernel_raw --kallsyms kallsyms.txt --phys 0x40080000 --format json --out profile.json 2>&1 || true
-            if [ -f profile.json ]; then
-              echo "=== JSON SUCCESS ==="
-              cat profile.json
-            fi
           fi
 
       - name: Upload profile if exists
