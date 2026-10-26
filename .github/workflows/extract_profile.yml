@@ -1,4 +1,4 @@
-name: Extract GhostLock Profile
+name: Extract GhostLock Profile v2
 
 on:
   workflow_dispatch:
@@ -16,6 +16,11 @@ jobs:
           repository: YuKongA/ghostlock-app
           path: ghostlock-app
 
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3 python3-pip git build-essential
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
@@ -29,32 +34,61 @@ jobs:
           unzip boot_a.zip
           ls -la boot_a.img
 
-      - name: Debug - find the binary
+      - name: Unpack boot.img manually (mkbootimg)
         run: |
-          echo "=== Searching for ghostlock-extract ==="
-          find . -name "ghostlock-extract" -type f 2>/dev/null
-          echo "=== Looking in target/release ==="
-          find . -type d -name "release" 2>/dev/null
-          echo "=== Full extract_rs dir ==="
-          ls -la ghostlock-app/tools/extract_rs/
+          git clone https://android.googlesource.com/platform/system/tools/mkbootimg
+          PYTHONPATH=mkbootimg python3 mkbootimg/unpack_bootimg.py --boot_img boot_a.img --out boot_unpacked
+          echo "=== Contents of boot_unpacked ==="
+          ls -la boot_unpacked/
 
-      - name: Run extractor
+      - name: Decompress kernel if needed
         run: |
-          BIN=$(find . -name "ghostlock-extract" -type f 2>/dev/null | head -n1)
-          if [ -z "$BIN" ]; then
-            echo "ERROR: Binary not found!"
-            exit 1
+          cd boot_unpacked
+          if [ -f kernel.gz ]; then
+            gunzip kernel.gz
+            mv kernel kernel_raw
+          elif [ -f Image.gz ]; then
+            gunzip Image.gz
+            mv Image kernel_raw
+          elif [ -f kernel ]; then
+            mv kernel kernel_raw
+          else
+            # Try to find largest file
+            LARGEST=$(find . -type f -size +1M | head -n1)
+            cp "$LARGEST" kernel_raw
           fi
+          echo "=== kernel_raw size ==="
+          ls -la kernel_raw
+          file kernel_raw
+
+      - name: Try extractor on raw kernel
+        run: |
+          BIN=$(find ghostlock-app -name "ghostlock-extract" -type f 2>/dev/null | head -n1)
           echo "Found binary at: $BIN"
           chmod +x "$BIN"
-          "$BIN" boot_a.img --format conf --out profile.conf
-          echo "=== Profile generated ==="
-          ls -la profile.conf
-          cat profile.conf
+          echo "=== Attempting extraction on raw kernel ==="
+          "$BIN" boot_unpacked/kernel_raw --format conf --out profile.conf 2>&1 || echo "EXTRACTOR_FAILED_1"
+          if [ ! -f profile.conf ]; then
+            echo "=== Trying with --kernel flag ==="
+            "$BIN" --kernel boot_unpacked/kernel_raw --format conf --out profile.conf 2>&1 || echo "EXTRACTOR_FAILED_2"
+          fi
+          if [ ! -f profile.conf ]; then
+            echo "=== Trying vmlinux-to-elf + extractor ==="
+            pip3 install vmlinux-to-elf
+            vmlinux-to-elf boot_unpacked/kernel_raw kernel.elf
+            "$BIN" kernel.elf --format conf --out profile.conf 2>&1 || echo "EXTRACTOR_FAILED_3"
+          fi
+          echo "=== Result ==="
+          if [ -f profile.conf ]; then
+            cat profile.conf
+          else
+            echo "PROFILE NOT CREATED"
+            exit 1
+          fi
 
-      - name: Upload profile
+      - name: Upload profile (if created)
         uses: actions/upload-artifact@v4
         with:
           name: ghostlock-profile
           path: profile.conf
-          if-no-files-found: error
+          if-no-files-found: warn
