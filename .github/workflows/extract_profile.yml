@@ -1,4 +1,4 @@
-name: Extract GhostLock Profile v4
+name: Extract GhostLock Profile v5
 
 on:
   workflow_dispatch:
@@ -23,11 +23,8 @@ jobs:
       - name: Diagnose version check
         run: |
           cd payload_extract_rs
-          echo "=== Files in src/ ==="
-          find src -name "*.rs" -type f
-          echo ""
           echo "=== All matches for version checks ==="
-          grep -rn "needs a\|5\.x\|6\.x\|major\|release" src/ | head -n 200
+          grep -rn "needs a\|5\.x\|6\.x\|major\|release" src/ | head -n 100
 
       - name: Install dependencies
         run: |
@@ -40,30 +37,40 @@ jobs:
       - name: Aggressive patch
         run: |
           cd payload_extract_rs
-          # Replace many patterns for version check
           find src -name "*.rs" -exec sed -i \
             -e 's/major < 5/major < 0/g' \
             -e 's/major < 6/major < 0/g' \
             -e 's/major >= 5/major >= 0/g' \
             -e 's/major >= 6/major >= 0/g' \
-            -e 's/major == 5 || major == 6/true/g' \
-            -e 's/5 | 6 =>/0..=99 =>/g' \
-            -e 's/5..=6 =>/0..=99 =>/g' \
             -e 's/release_major < 5/release_major < 0/g' \
             -e 's/release_major < 6/release_major < 0/g' \
             {} \;
-          
           echo "=== After patch ==="
           grep -rn "needs a\|5\.x\|6\.x\|major < \|major >= " src/ | head -n 50 || echo "ALL PATCHED"
 
-      - name: Update ghostlock-extract Cargo.toml
+      - name: Fix Cargo.toml for path dependency
         run: |
           cd ghostlock-app/tools/extract_rs
           echo "=== Original Cargo.toml ==="
           cat Cargo.toml
           echo ""
-          sed -i 's|git = "https://github.com/YuKongA/payload_extract_rs"[^}]*|path = "../../../payload_extract_rs"|g' Cargo.toml
-          echo ""
+          # Replace the ENTIRE payload-extract line with a clean path dependency
+          python3 << 'PYEOF'
+          import re
+          with open('Cargo.toml', 'r') as f:
+              content = f.read()
+          
+          # Match: payload-extract = { ... } (entire line, any content)
+          content = re.sub(
+              r'^payload[-_]extract\s*=\s*\{[^}]*\}.*$',
+              'payload-extract = { path = "../../../payload_extract_rs" }',
+              content,
+              flags=re.MULTILINE
+          )
+          
+          with open('Cargo.toml', 'w') as f:
+              f.write(content)
+          PYEOF
           echo "=== Patched Cargo.toml ==="
           cat Cargo.toml
 
