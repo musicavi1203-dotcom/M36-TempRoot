@@ -76,7 +76,9 @@ jobs:
 
       - name: Try extractor with --kallsyms
         run: |
+          # Convert BIN to absolute path before changing directory
           BIN=$(find ghostlock-app -name "ghostlock-extract" -type f 2>/dev/null | head -n1)
+          BIN=$(realpath "$BIN")
           echo "Found binary at: $BIN"
           chmod +x "$BIN"
           
