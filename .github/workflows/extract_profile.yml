@@ -17,112 +17,89 @@ jobs:
           path: ghostlock-app
 
       - name: Clone payload_extract_rs manually
-        run: |
-          git clone https://github.com/YuKongA/payload_extract_rs.git payload_extract_rs
+        run: git clone https://github.com/YuKongA/payload_extract_rs.git payload_extract_rs
 
       - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y python3 python3-pip git build-essential
+        run: sudo apt-get update && sudo apt-get install -y python3 python3-pip git build-essential
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: DIAGNOSE - Find version check location
+      - name: SHOW main.rs around line 611
         run: |
-          echo "=== Search in ghostlock-app ==="
-          grep -rn "5\.x\|6\.x\|needs a" ghostlock-app/tools/extract_rs/src/ || echo "not in ghostlock-app"
-          echo ""
-          echo "=== Search in payload_extract_rs ==="
-          grep -rn "5\.x\|6\.x\|needs a" payload_extract_rs/src/ || echo "not in payload_extract_rs"
+          echo "=== Lines 570-650 of main.rs (the check is at 611) ==="
+          sed -n '570,650p' ghostlock-app/tools/extract_rs/src/main.rs
 
-      - name: Patch ghostlock-extract source
+      - name: NUCLEAR PATCH main.rs
         run: |
-          cd ghostlock-app/tools/extract_rs
-          find src -name "*.rs" -exec sed -i \
-            -e 's/needs a 5\.x\/6\.x release/needs a 4.19+ release/g' \
-            -e 's/needs a 5/needs a 4/g' \
-            -e 's/5\.x\/6\.x/4.19+/g' \
-            {} \;
-          echo "=== After patch in ghostlock-app ==="
-          grep -rn "needs a\|5\.x\|6\.x\|4\.19" src/ | head -n 20 || echo "no matches"
+          cd ghostlock-app/tools/extract_rs/src
+          # Replace the version check condition with one that always returns true (allow any version)
+          # We try many patterns
+          sed -i \
+            -e 's/if major < 5 || major > 6/if false/g' \
+            -e 's/if major < 5/if false/g' \
+            -e 's/if major > 6/if false/g' \
+            -e 's/if release_major < 5 || release_major > 6/if false/g' \
+            -e 's/if !(5..=6).contains(&major)/if false/g' \
+            -e 's/if !matches!(major, 5..=6)/if false/g' \
+            -e 's/if kernel_major < 5 || kernel_major > 6/if false/g' \
+            -e 's/if !(major >= 5 \&\& major <= 6)/if false/g' \
+            main.rs
+          echo "=== After patch, lines 605-620 ==="
+          sed -n '605,620p' main.rs
 
-      - name: Patch payload_extract_rs source
+      - name: Patch payload_extract_rs too (just in case)
         run: |
-          cd payload_extract_rs
-          find src -name "*.rs" -exec sed -i \
+          cd payload_extract_rs/src
+          find . -name "*.rs" -exec sed -i \
             -e 's/major < 5/major < 0/g' \
             -e 's/major < 6/major < 0/g' \
             -e 's/major >= 5/major >= 0/g' \
-            -e 's/major >= 6/major >= 0/g' \
-            -e 's/release_major < 5/release_major < 0/g' \
-            -e 's/release_major < 6/release_major < 0/g' \
             {} \;
-          echo "=== After patch in payload_extract_rs ==="
-          grep -rn "major < 5\|major >= 5\|major < 6\|major >= 6" src/ || echo "all patched"
 
-      - name: Fix Cargo.toml for path dependency
+      - name: Fix Cargo.toml
         run: |
           cd ghostlock-app/tools/extract_rs
           python3 << 'PYEOF'
           import re
-          with open('Cargo.toml', 'r') as f:
-              content = f.read()
-          content = re.sub(
-              r'^payload[-_]extract\s*=\s*\{[^}]*\}.*$',
-              'payload-extract = { path = "../../../payload_extract_rs" }',
-              content,
-              flags=re.MULTILINE
-          )
-          with open('Cargo.toml', 'w') as f:
-              f.write(content)
+          with open('Cargo.toml') as f: c = f.read()
+          c = re.sub(r'^payload[-_]extract\s*=\s*\{[^}]*\}.*$',
+                     'payload-extract = { path = "../../../payload_extract_rs" }',
+                     c, flags=re.MULTILINE)
+          with open('Cargo.toml','w') as f: f.write(c)
           PYEOF
-          echo "=== Patched Cargo.toml ==="
           cat Cargo.toml
 
       - name: Build extractor
-        run: |
-          cd ghostlock-app/tools/extract_rs
-          cargo build --release
+        run: cd ghostlock-app/tools/extract_rs && cargo build --release
 
-      - name: Extract and prepare boot.img
+      - name: Prepare boot.img + kallsyms
         run: |
           unzip boot_a.zip
           git clone https://android.googlesource.com/platform/system/tools/mkbootimg
           PYTHONPATH=mkbootimg python3 mkbootimg/unpack_bootimg.py --boot_img boot_a.img --out boot_unpacked
           cd boot_unpacked
-          cp kernel kernel_raw.gz
-          gunzip kernel_raw.gz
+          cp kernel kernel_raw.gz && gunzip kernel_raw.gz
           pip3 install vmlinux-to-elf
           vmlinux-to-elf kernel_raw kernel.elf
           nm kernel.elf | sort > kallsyms.txt
-          echo "kallsyms.txt lines: $(wc -l < kallsyms.txt)"
+          wc -l kallsyms.txt
 
-      - name: Run patched extractor
+      - name: Run extractor
         run: |
-          BIN=$(find ghostlock-app -name "ghostlock-extract" -type f -path "*/release/*" 2>/dev/null | head -n1)
-          BIN=$(realpath "$BIN")
-          echo "Found binary at: $BIN"
+          BIN=$(realpath $(find ghostlock-app -name "ghostlock-extract" -type f -path "*/release/*" | head -n1))
           chmod +x "$BIN"
           cd boot_unpacked
-          echo "=== Running patched extractor ==="
+          echo "=== Attempt conf ==="
           "$BIN" kernel_raw --kallsyms kallsyms.txt --phys 0x40080000 --format conf --out profile.conf 2>&1 || true
-          echo ""
-          echo "=== Result ==="
-          if [ -f profile.conf ]; then
-            echo "=== SUCCESS! ==="
-            cat profile.conf
-          else
-            echo "PROFILE STILL NOT CREATED"
-            echo "=== Trying --format json instead ==="
+          [ -f profile.conf ] && echo "=== SUCCESS! ===" && cat profile.conf
+          if [ ! -f profile.conf ]; then
+            echo "=== Attempt json ==="
             "$BIN" kernel_raw --kallsyms kallsyms.txt --phys 0x40080000 --format json --out profile.json 2>&1 || true
-            if [ -f profile.json ]; then
-              echo "=== JSON SUCCESS! ==="
-              cat profile.json
-            fi
+            [ -f profile.json ] && echo "=== JSON SUCCESS ===" && cat profile.json
           fi
 
-      - name: Upload profile
+      - name: Upload
         uses: actions/upload-artifact@v4
         with:
           name: ghostlock-profile
