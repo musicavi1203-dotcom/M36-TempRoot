@@ -7,7 +7,7 @@ jobs:
   extract:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout M36-TempRoot repo (contains boot_a.zip)
+      - name: Checkout M36-TempRoot repo
         uses: actions/checkout@v4
 
       - name: Checkout GhostLock repository
@@ -32,8 +32,12 @@ jobs:
       - name: Run extractor
         run: |
           cd ghostlock-app/tools/extract_rs
-          ./target/release/ghostlock-extract ../../../boot_a.img --format conf --out profile.conf
+          # מחפשים את הבינארי אוטומטית
+          BIN=$(find target/release -maxdepth 1 -type f -executable | head -n1)
+          echo "Found binary: $BIN"
+          "$BIN" ../../../boot_a.img --format conf --out profile.conf
           ls -la profile.conf
+          echo "=== Profile contents ==="
           cat profile.conf
 
       - name: Upload profile
@@ -41,3 +45,4 @@ jobs:
         with:
           name: ghostlock-profile
           path: ghostlock-app/tools/extract_rs/profile.conf
+          if-no-files-found: error
