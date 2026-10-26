@@ -1,4 +1,4 @@
-name: find_perf
+name: find_perf_path
 on: [push, workflow_dispatch]
 
 jobs:
@@ -10,11 +10,19 @@ jobs:
         with:
           repository: YuKongA/ghostlock-app
           
-      - name: Search for perf_event in C++ source
+      - name: Find where perf_event_open is
         run: |
-          echo "=== Search for perf_event_open ==="
-          grep -rn "perf_event_open" core/ || echo "NOT FOUND"
+          echo "=== Find main.cpp (to know the C++ root) ==="
+          find . -name "main.cpp"
           
           echo ""
-          echo "=== Search for perf_event (struct/calls) ==="
-          grep -rn "perf_event" core/ | head -n 30
+          echo "=== Find files with perf_event_open ==="
+          grep -rn "perf_event_open" . --include="*.cpp" --include="*.h" --include="*.hpp" || echo "NOT FOUND"
+          
+          echo ""
+          echo "=== Find files with perf_find_task ==="
+          grep -rn "perf_find_task" . --include="*.cpp" --include="*.h" --include="*.hpp" || echo "NOT FOUND"
+          
+          echo ""
+          echo "=== Find files with perf leak logic ==="
+          grep -rn "perf leak did not reproduce" . || echo "NOT FOUND"
