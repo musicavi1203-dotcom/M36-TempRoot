@@ -1,77 +1,32 @@
-name: build_patched_apk
-on: [push, workflow_dispatch]
+name: find_all_validations
+on: [workflow_dispatch]
 
 jobs:
-  build:
+  find:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout GhostLock
         uses: actions/checkout@v4
         with:
           repository: YuKongA/ghostlock-app
-          path: ghostlock-app
-
-      - name: Patch ProfileMerger (Version and Execution)
-        run: |
-          cd ghostlock-app
-          # 1. מתיר גרסאות 4
-          sed -i 's/in 5..6/in 4..6/g' profile-core/src/main/kotlin/com/ghostlock/app/data/profile/ProfileMerger.kt
-          # 2. מנטרל את בדיקת ה-execution
-          sed -i 's/require(profile.containsKey("execution")) { "missing execution tuning" }/\/\/ execution check disabled for custom profile/' profile-core/src/main/kotlin/com/ghostlock/app/data/profile/ProfileMerger.kt
           
-          echo "=== After Kotlin patch ==="
-          grep -n "in 4..6\|execution check" profile-core/src/main/kotlin/com/ghostlock/app/data/profile/ProfileMerger.kt
-
-      - name: Patch C++ PAGE_SIZE macro conflict
+      - name: Search all validation logic
         run: |
-          cd ghostlock-app
-          FILE=$(find . -name "constants.hpp" | grep "core/kernel/constants.hpp" | head -n 1)
-          sed -i 's/    inline constexpr unsigned long PAGE_SIZE = 1UL << PAGE_SHIFT;/#undef PAGE_SIZE\n    inline constexpr unsigned long PAGE_SIZE = 1UL << PAGE_SHIFT;/' "$FILE"
-
-      - name: Install Rust targets and cargo-ndk
-        run: |
-          rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android i686-linux-android
-          cargo install cargo-ndk
-
-      - name: Setup Android NDK
-        uses: nttld/setup-ndk@v1
-        id: setup-ndk
-        with:
-          ndk-version: r27c
-          add-to-path: true
-
-      - name: Build ghostlock-extract (Rust)
-        env:
-          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
-        run: |
-          cd ghostlock-app/tools/extract_rs
-          cargo ndk -t arm64-v8a build --release
-
-      - name: Setup Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'zulu'
-          java-version: '17'
-
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v4
-
-      - name: Build APK (Both Debug and Release)
-        env:
-          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
-        run: |
-          cd ghostlock-app
-          chmod +x gradlew
-          ./gradlew assemble --stacktrace
-
-      - name: Find and Copy APK
-        run: |
-          find ghostlock-app -name "*.apk" -exec cp {} ./ \;
-          ls -la *.apk
-
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: ghostlock-apk
-          path: "*.apk"
-          if-no-files-found: error
+          echo "=== Where does profileValid come from? ==="
+          grep -rn "profileValid" --include="*.kt" .
+          
+          echo ""
+          echo "=== All require() in profile-core ==="
+          grep -rn "require(" profile-core/src/main/kotlin/ || echo "none"
+          
+          echo ""
+          echo "=== All throw/error in ProfileResolver ==="
+          grep -rn "throw\|require\|isValid\|valid" profile-core/src/main/kotlin/com/ghostlock/app/data/profile/ProfileResolver.kt || echo "none"
+          
+          echo ""
+          echo "=== All validation in NativeProfile.kt ==="
+          grep -n "throw\|require\|invalid\|missing" profile-core/src/main/kotlin/com/ghostlock/app/data/NativeProfile.kt || echo "none"
+          
+          echo ""
+          echo "=== Search for 'isValid' or 'validate' anywhere ==="
+          grep -rn "fun isValid\|fun validate\|fun.*[Vv]alid" --include="*.kt" . | head -n 20
