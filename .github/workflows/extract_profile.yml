@@ -18,13 +18,23 @@ jobs:
           echo "=== After patch ==="
           grep -n "in 4..6" profile-core/src/main/kotlin/com/ghostlock/app/data/profile/ProfileMerger.kt
 
+      - name: Install Rust targets and cargo-ndk
+        run: |
+          rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android i686-linux-android
+          cargo install cargo-ndk
+
+      - name: Build ghostlock-extract (Rust)
+        run: |
+          cd ghostlock-app/tools/extract_rs
+          cargo build --release --target aarch64-linux-android
+
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: 'zulu'
           java-version: '17'
 
-      - name: Setup Android SDK (v4 - Node 24 compatible)
+      - name: Setup Android SDK
         uses: android-actions/setup-android@v4
 
       - name: Build APK
