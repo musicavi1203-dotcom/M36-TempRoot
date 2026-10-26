@@ -1,98 +1,45 @@
-name: build_no_perf_apk
+name: extract_real_offsets
 on: [push, workflow_dispatch]
 
 jobs:
-  build:
+  extract:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout GhostLock
+      - name: Checkout M36-TempRoot
         uses: actions/checkout@v4
-        with:
-          repository: YuKongA/ghostlock-app
-          path: ghostlock-app
 
-      - name: Patch Kotlin (Version & Execution)
+      - name: Prepare boot.img + vmlinux
         run: |
-          cd ghostlock-app
-          sed -i 's/in 5..6/in 4..6/g' profile-core/src/main/kotlin/com/ghostlock/app/data/profile/ProfileMerger.kt
-          sed -i 's/require(profile.containsKey("execution")) { "missing execution tuning" }/\/\/ bypassed/' profile-core/src/main/kotlin/com/ghostlock/app/data/profile/ProfileMerger.kt
+          unzip boot_a.zip
+          git clone https://android.googlesource.com/platform/system/tools/mkbootimg
+          PYTHONPATH=mkbootimg python3 mkbootimg/unpack_bootimg.py --boot_img boot_a.img --out boot_unpacked
+          cd boot_unpacked
+          cp kernel kernel_raw.gz && gunzip kernel_raw.gz
+          pip3 install vmlinux-to-elf
+          vmlinux-to-elf kernel_raw kernel.elf
 
-      - name: Patch C++ (PAGE_SIZE + Skip Perf)
+      - name: Install pahole
         run: |
-          cd ghostlock-app
-          # 1. תיקון PAGE_SIZE
-          FILE=$(find . -name "constants.hpp" | grep "core/kernel/constants.hpp" | head -n 1)
-          sed -i 's/    inline constexpr unsigned long PAGE_SIZE = 1UL << PAGE_SHIFT;/#undef PAGE_SIZE\n    inline constexpr unsigned long PAGE_SIZE = 1UL << PAGE_SHIFT;/' "$FILE"
-          
-          # 2. עקיפת perf_find_task בקובץ ops.cpp
-          python3 << 'PYEOF'
-          import re
-          
-          # קובץ ops.cpp - הפונקציה שמחזירה 0
-          with open('src/core/attack/ops.cpp', 'r') as f:
-              content = f.read()
-          
-          # מוצא את הפונקציה ומחליף את הגוף שלה
-          pattern = r'uintptr_t perf_find_task\(void\) \{.*?\n    \}'
-          replacement = '''uintptr_t perf_find_task(void) {
-              // Bypassed perf_event_open: returning a fake valid task address
-              // We use init_task as a guess, the exploit will write to its cred
-              return 0xffffff800177b840; 
-          }'''
-          
-          content = re.sub(pattern, replacement, content, flags=re.DOTALL)
-          
-          with open('src/core/attack/ops.cpp', 'w') as f:
-              f.write(content)
-          print("SUCCESS: perf_find_task bypassed in ops.cpp")
-          PYEOF
-          
-          # 3. וידוא שהשינוי עבד
-          echo "=== Checking patch ==="
-          grep -A 3 "uintptr_t perf_find_task" src/core/attack/ops.cpp
+          sudo apt-get update
+          sudo apt-get install -y dwarves
 
-      - name: Install Rust targets and cargo-ndk
+      - name: Extract struct offsets with pahole
         run: |
-          rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android i686-linux-android
-          cargo install cargo-ndk
+          cd boot_unpacked
+          echo "=== TASK_STRUCT OFFSETS ==="
+          pahole -C task_struct kernel.elf 2>/dev/null | grep -E "real_cred|cred|comm|tasks|pid|tgid|prio|normal_prio|pi_lock|pi_waiters|pi_top_task|pi_blocked_on|atomic_flags|seccomp|sched_task_group" || echo "pahole failed (no DWARF)"
+          
+          echo ""
+          echo "=== CRED OFFSETS ==="
+          pahole -C cred kernel.elf 2>/dev/null | grep -E "usage|caps|security|user|user_ns|group_info" || echo "pahole failed (no DWARF)"
+          
+          echo ""
+          echo "=== RT_MUTEX_WAITER OFFSETS ==="
+          pahole -C rt_mutex_waiter kernel.elf 2>/dev/null | head -n 20 || echo "pahole failed (no DWARF)"
 
-      - name: Setup Android NDK
-        uses: nttld/setup-ndk@v1
-        id: setup-ndk
-        with:
-          ndk-version: r27c
-          add-to-path: true
-
-      - name: Build ghostlock-extract (Rust)
-        env:
-          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
-        run: |
-          cd ghostlock-app/tools/extract_rs
-          cargo ndk -t arm64-v8a build --release
-
-      - name: Setup Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'zulu'
-          java-version: '17'
-
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v4
-
-      - name: Build APK
-        env:
-          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
-        run: |
-          cd ghostlock-app
-          chmod +x gradlew
-          ./gradlew assemble --stacktrace
-
-      - name: Find and Copy APK
-        run: find ghostlock-app -name "*.apk" -exec cp {} ./ \;
-
-      - name: Upload APK
+      - name: Upload offsets
         uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: ghostlock-no-perf
-          path: "*.apk"
-          if-no-files-found: error
+          name: real-offsets
+          path: boot_unpacked/kernel.elf
