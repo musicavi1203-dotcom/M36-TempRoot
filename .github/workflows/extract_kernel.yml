@@ -1,0 +1,69 @@
+name: Extract Kernel and Offsets
+
+on:
+  workflow_dispatch:
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3 python3-pip git build-essential
+          pip3 install vmlinux-to-elf
+
+      - name: Unpack boot.img
+        run: |
+          # Download unpack_bootimg from AOSP or use a prebuilt tool
+          # For simplicity, we'll use a simple python script or magiskboot if available
+          # Let's use the official unpack_bootimg from Google
+          git clone https://android.googlesource.com/platform/system/tools/mkbootimg
+          cd mkbootimg
+          python3 -m pip install .
+          cd ..
+          unpack_bootimg --boot_img boot.img --out boot_unpacked
+
+      - name: Find and extract kernel
+        run: |
+          # The kernel is usually named 'kernel' or 'Image.gz' or 'zImage'
+          ls -la boot_unpacked/
+          # Try to find the kernel file
+          if [ -f boot_unpacked/kernel ]; then
+            cp boot_unpacked/kernel kernel_raw
+          elif [ -f boot_unpacked/Image.gz ]; then
+            cp boot_unpacked/Image.gz kernel_raw
+            gunzip kernel_raw
+          elif [ -f boot_unpacked/zImage ]; then
+            cp boot_unpacked/zImage kernel_raw
+          else
+            echo "Kernel not found in standard names. Listing all files:"
+            find boot_unpacked -type f -size +1M
+            # Fallback: try to find the largest file
+            find boot_unpacked -type f -size +1M -exec cp {} kernel_raw \;
+          fi
+          ls -la kernel_raw
+
+      - name: Convert kernel to ELF with symbols
+        run: |
+          vmlinux-to-elf kernel_raw kernel.elf
+          ls -la kernel.elf
+
+      - name: Extract offsets
+        run: |
+          # This is a placeholder. We will need a script that extracts specific offsets
+          # For now, let's just get the symbols related to credentials
+          readelf -s kernel.elf | grep -E "init_cred|init_task|commit_creds|prepare_kernel_cred" > offsets.txt
+          cat offsets.txt
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel_analysis
+          path: |
+            kernel.elf
+            offsets.txt
+          if-no-files-found: warn
