@@ -1,0 +1,41 @@
+name: Extract GhostLock Profile
+
+on:
+  workflow_dispatch:
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout GhostLock repository
+        uses: actions/checkout@v4
+        with:
+          repository: YuKongA/ghostlock-app
+          path: ghostlock-app
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build extractor
+        run: |
+          cd ghostlock-app/tools/extract_rs
+          cargo build --release
+
+      - name: Download boot.img from Release
+        run: |
+          wget https://github.com/musicavi1203-dotcom/M36-TempRoot/releases/download/v1.0/boot.zip -O boot.zip
+          unzip boot.zip
+          ls -la boot_a.img
+
+      - name: Run extractor
+        run: |
+          cd ghostlock-app/tools/extract_rs
+          cargo run --release -- ../../../boot_a.img --format conf --out profile.conf
+          ls -la profile.conf
+          cat profile.conf
+
+      - name: Upload profile
+        uses: actions/upload-artifact@v4
+        with:
+          name: ghostlock-profile
+          path: ghostlock-app/tools/extract_rs/profile.conf
