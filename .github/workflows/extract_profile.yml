@@ -35,7 +35,6 @@ jobs:
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
         run: |
           cd ghostlock-app/tools/extract_rs
-          # שימוש בשם ה-target של אנדרואיד (arm64-v8a) שה-cargo-ndk מצפה לו
           cargo ndk -t arm64-v8a build --release
 
       - name: Setup Java
@@ -47,11 +46,20 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
 
+      - name: Clean Gradle Cache
+        run: |
+          cd ghostlock-app
+          rm -rf ~/.gradle/caches
+          rm -rf build
+          ./gradlew clean
+
       - name: Build APK
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
         run: |
           cd ghostlock-app
           chmod +x gradlew
-          ./gradlew assembleRelease
+          ./gradlew assembleRelease --stacktrace
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
