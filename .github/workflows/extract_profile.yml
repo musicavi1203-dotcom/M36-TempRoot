@@ -1,4 +1,4 @@
-name: build_perf_fixed_apk
+name: build_cpu_fix_apk
 on: [push, workflow_dispatch]
 
 jobs:
@@ -11,17 +11,27 @@ jobs:
           repository: YuKongA/ghostlock-app
           path: ghostlock-app
 
-      - name: Patch ProfileMerger (Version and Execution)
+      - name: Patch ProfileMerger
         run: |
           cd ghostlock-app
           sed -i 's/in 5..6/in 4..6/g' profile-core/src/main/kotlin/com/ghostlock/app/data/profile/ProfileMerger.kt
           sed -i 's/require(profile.containsKey("execution")) { "missing execution tuning" }/\/\/ bypassed/' profile-core/src/main/kotlin/com/ghostlock/app/data/profile/ProfileMerger.kt
 
-      - name: Patch C++ PAGE_SIZE macro conflict
+      - name: Patch C++ (PAGE_SIZE + CPU fix)
         run: |
           cd ghostlock-app
+          # 1. PAGE_SIZE
           FILE=$(find . -name "constants.hpp" | grep "core/kernel/constants.hpp" | head -n 1)
           sed -i 's/    inline constexpr unsigned long PAGE_SIZE = 1UL << PAGE_SHIFT;/#undef PAGE_SIZE\n    inline constexpr unsigned long PAGE_SIZE = 1UL << PAGE_SHIFT;/' "$FILE"
+          
+          # 2. CPU fix - replace get_nprocs or sysconf with 0
+          # We search for the specific file. It's likely kernelsnitch.cpp or similar.
+          find src/core -name "*.cpp" -o -name "*.hpp" | xargs grep -l "cpu=" | head -n 5
+          find src/core -name "*.cpp" -o -name "*.hpp" | xargs sed -i 's/sysconf(_SC_NPROCESSORS_ONLN)/0/g'
+          find src/core -name "*.cpp" -o -name "*.hpp" | xargs sed -i 's/get_nprocs()/0/g'
+          
+          echo "=== After CPU patch ==="
+          grep -r "cpu=" src/core/ | head -n 10
 
       - name: Install Rust targets and cargo-ndk
         run: |
@@ -65,6 +75,6 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: ghostlock-perf-fixed
+          name: ghostlock-cpu-fixed
           path: "*.apk"
           if-no-files-found: error
