@@ -35,7 +35,8 @@ jobs:
           char _license[] SEC("license") = "GPL";
           EOF
           
-          clang -target bpf -O2 -g -c leak.bpf.c -o leak.bpf.o
+          # הוספת נתיב ה-headers של aarch64
+          clang -target bpf -O2 -g -I/usr/include/aarch64-linux-gnu -c leak.bpf.c -o leak.bpf.o
           
           cat << 'EOF' > leak.c
           #include <stdio.h>
