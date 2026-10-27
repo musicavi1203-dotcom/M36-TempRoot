@@ -11,7 +11,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang llvm libbpf-dev libelf-dev zlib1g-dev bpftool gcc-aarch64-linux-gnu
+          sudo apt-get install -y clang llvm libbpf-dev libelf-dev zlib1g-dev gcc-aarch64-linux-gnu linux-tools-common linux-tools-generic
 
       - name: Build eBPF and Loader
         run: |
