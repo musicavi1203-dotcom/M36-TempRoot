@@ -11,6 +11,8 @@ jobs:
         run: |
           sudo DEBIAN_FRONTEND=noninteractive apt-get update -y
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y clang llvm libbpf-dev libelf-dev zlib1g-dev
+          echo "=== Header paths available ==="
+          ls /usr/include/ | grep -i "aarch\|linux"
 
       - name: Build eBPF + Loader
         run: |
@@ -35,7 +37,7 @@ jobs:
           char _license[] SEC("license") = "GPL";
           EOF
           
-          clang -target bpf -O2 -g -c leak.bpf.c -o leak.bpf.o
+          clang -target bpf -O2 -g -I/usr/include/aarch64-linux-gnu -c leak.bpf.c -o leak.bpf.o
           
           cat << 'EOF' > leak.c
           #include <stdio.h>
