@@ -7,10 +7,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install dependencies
+      - name: Install dependencies (with ARM64 architecture)
         run: |
+          sudo dpkg --add-architecture arm64
           sudo DEBIAN_FRONTEND=noninteractive apt-get update -y
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y clang llvm libbpf-dev libelf-dev zlib1g-dev gcc-aarch64-linux-gnu
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            clang llvm gcc-aarch64-linux-gnu \
+            libbpf-dev:arm64 libelf-dev:arm64 zlib1g-dev:arm64
 
       - name: Build eBPF + Loader
         run: |
@@ -83,7 +86,11 @@ jobs:
           }
           EOF
           
-          aarch64-linux-gnu-gcc -static -O2 leak.c -o leak -lbpf -lelf -lz
+          aarch64-linux-gnu-gcc -static -O2 leak.c -o leak \
+            -I/usr/include/aarch64-linux-gnu \
+            -L/usr/lib/aarch64-linux-gnu \
+            -lbpf -lelf -lz
+          
           file leak
           ls -la leak leak.bpf.o
 
