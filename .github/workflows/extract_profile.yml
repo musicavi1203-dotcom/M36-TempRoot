@@ -1,14 +1,14 @@
-name: extract_real_offsets
+name: disassemble_offsets
 on: [push, workflow_dispatch]
 
 jobs:
-  extract:
+  disassemble:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout M36-TempRoot
         uses: actions/checkout@v4
 
-      - name: Prepare boot.img + vmlinux
+      - name: Prepare kernel.elf
         run: |
           unzip boot_a.zip
           git clone https://android.googlesource.com/platform/system/tools/mkbootimg
@@ -18,28 +18,26 @@ jobs:
           pip3 install vmlinux-to-elf
           vmlinux-to-elf kernel_raw kernel.elf
 
-      - name: Install pahole
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y dwarves
+      - name: Install aarch64 binutils
+        run: sudo apt-get update && sudo apt-get install -y binutils-aarch64-linux-gnu
 
-      - name: Extract struct offsets with pahole
+      - name: Disassemble critical functions
         run: |
           cd boot_unpacked
-          echo "=== TASK_STRUCT OFFSETS ==="
-          pahole -C task_struct kernel.elf 2>/dev/null | grep -E "real_cred|cred|comm|tasks|pid|tgid|prio|normal_prio|pi_lock|pi_waiters|pi_top_task|pi_blocked_on|atomic_flags|seccomp|sched_task_group" || echo "pahole failed (no DWARF)"
+          
+          echo "=================================================="
+          echo "=== get_task_comm (Accesses task->comm) ==="
+          echo "=================================================="
+          aarch64-linux-gnu-objdump -d --no-show-raw-insn kernel.elf | grep -A 20 "<get_task_comm>:" || echo "NOT FOUND"
           
           echo ""
-          echo "=== CRED OFFSETS ==="
-          pahole -C cred kernel.elf 2>/dev/null | grep -E "usage|caps|security|user|user_ns|group_info" || echo "pahole failed (no DWARF)"
+          echo "=================================================="
+          echo "=== commit_creds (Accesses task->cred and real_cred) ==="
+          echo "=================================================="
+          aarch64-linux-gnu-objdump -d --no-show-raw-insn kernel.elf | grep -A 40 "<commit_creds>:" || echo "NOT FOUND"
           
           echo ""
-          echo "=== RT_MUTEX_WAITER OFFSETS ==="
-          pahole -C rt_mutex_waiter kernel.elf 2>/dev/null | head -n 20 || echo "pahole failed (no DWARF)"
-
-      - name: Upload offsets
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: real-offsets
-          path: boot_unpacked/kernel.elf
+          echo "=================================================="
+          echo "=== next_task (Accesses task->tasks) ==="
+          echo "=================================================="
+          aarch64-linux-gnu-objdump -d --no-show-raw-insn kernel.elf | grep -A 15 "<next_task>:" || echo "NOT FOUND"
