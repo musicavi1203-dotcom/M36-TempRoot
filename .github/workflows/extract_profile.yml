@@ -1,4 +1,4 @@
-name: build_cpu_fix_apk
+name: build_cpu_fix_v2
 on: [push, workflow_dispatch]
 
 jobs:
@@ -11,27 +11,28 @@ jobs:
           repository: YuKongA/ghostlock-app
           path: ghostlock-app
 
-      - name: Patch ProfileMerger
+      - name: Patch Kotlin
         run: |
           cd ghostlock-app
           sed -i 's/in 5..6/in 4..6/g' profile-core/src/main/kotlin/com/ghostlock/app/data/profile/ProfileMerger.kt
           sed -i 's/require(profile.containsKey("execution")) { "missing execution tuning" }/\/\/ bypassed/' profile-core/src/main/kotlin/com/ghostlock/app/data/profile/ProfileMerger.kt
 
-      - name: Patch C++ (PAGE_SIZE + CPU fix)
+      - name: Patch C++ (PAGE_SIZE + CPU fix v2)
         run: |
           cd ghostlock-app
-          # 1. PAGE_SIZE
+          
+          # PAGE_SIZE fix
           FILE=$(find . -name "constants.hpp" | grep "core/kernel/constants.hpp" | head -n 1)
           sed -i 's/    inline constexpr unsigned long PAGE_SIZE = 1UL << PAGE_SHIFT;/#undef PAGE_SIZE\n    inline constexpr unsigned long PAGE_SIZE = 1UL << PAGE_SHIFT;/' "$FILE"
           
-          # 2. CPU fix - replace get_nprocs or sysconf with 0
-          # We search for the specific file. It's likely kernelsnitch.cpp or similar.
-          find src/core -name "*.cpp" -o -name "*.hpp" | xargs grep -l "cpu=" | head -n 5
-          find src/core -name "*.cpp" -o -name "*.hpp" | xargs sed -i 's/sysconf(_SC_NPROCESSORS_ONLN)/0/g'
-          find src/core -name "*.cpp" -o -name "*.hpp" | xargs sed -i 's/get_nprocs()/0/g'
+          # CPU fix: use (sysconf - 1) instead of sysconf
+          find src/core -type f \( -name "*.cpp" -o -name "*.hpp" -o -name "*.h" \) -exec sed -i \
+            -e 's/sysconf(_SC_NPROCESSORS_ONLN)/(sysconf(_SC_NPROCESSORS_ONLN) - 1)/g' \
+            -e 's/get_nprocs()/(sysconf(_SC_NPROCESSORS_ONLN) - 1)/g' \
+            {} \;
           
-          echo "=== After CPU patch ==="
-          grep -r "cpu=" src/core/ | head -n 10
+          echo "=== Verification ==="
+          grep -rn "sysconf(_SC_NPROCESSORS_ONLN)" src/core/ | head -n 5
 
       - name: Install Rust targets and cargo-ndk
         run: |
@@ -75,6 +76,6 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: ghostlock-cpu-fixed
+          name: ghostlock-cpu-fix-v2
           path: "*.apk"
           if-no-files-found: error
