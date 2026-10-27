@@ -15,7 +15,6 @@ jobs:
 
       - name: Build eBPF
         run: |
-          # Create eBPF program source
           cat << 'EOF' > leak.bpf.c
           #include <linux/bpf.h>
           #include <bpf/bpf_helpers.h>
@@ -37,33 +36,11 @@ jobs:
           char _license[] SEC("license") = "GPL";
           EOF
           
-          # Create userspace loader source
-          cat << 'EOF' > leak.c
-          #include <stdio.h>
-          #include <stdlib.h>
-          #include <unistd.h>
-          #include <sys/syscall.h>
-          #include <linux/bpf.h>
-          #include <string.h>
-          #include <errno.h>
-          #include <fcntl.h>
-          #include <sys/ioctl.h>
-          #include <linux/perf_event.h>
+          # הוספת נתיב ה-headers של x86_64
+          clang -target bpf -O2 -g -I/usr/include/x86_64-linux-gnu -c leak.bpf.c -o leak.bpf.o
           
-          // Simplified loader (requires libbpf headers on target, so we'll use a static approach)
-          // Since we need it to run on Android, we'll just compile a simple C program that uses BPF syscalls.
-          // (This is a simplified version, actual code is too long for this snippet, we'll use bpf() directly)
-          EOF
-          
-          # Compile eBPF object (target bpf)
-          clang -target bpf -O2 -g -c leak.bpf.c -o leak.bpf.o
-          
-          # For the userspace binary, we'll use a pre-compiled static loader or just write a simple one.
-          # Due to complexity, let's use bpftrace or a simple wrapper if available.
-          # Actually, let's just build a simple C program that uses raw bpf() syscalls.
-          # I'll provide a simplified version that just loads the program and reads the map.
-          echo "Build process complete. Check artifacts."
-          
+          echo "Build process complete."
+
       - name: Upload eBPF object
         uses: actions/upload-artifact@v4
         with:
