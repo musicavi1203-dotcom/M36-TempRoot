@@ -1,28 +1,33 @@
-name: inspect_exploit
+name: extract_ebpf_offsets
 on: [push, workflow_dispatch]
 
 jobs:
-  inspect:
+  extract:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      
-      - name: Clone exploit
+      - name: Checkout M36-TempRoot
+        uses: actions/checkout@v4
+
+      - name: Prepare kernel.elf
         run: |
-          git clone https://github.com/Botti01/eBPF-CVE-exploitation.git
-          cd eBPF-CVE-exploitation
-          
-      - name: Show key parts of exploit source
+          unzip boot_a.zip
+          git clone https://android.googlesource.com/platform/system/tools/mkbootimg
+          PYTHONPATH=mkbootimg python3 mkbootimg/unpack_bootimg.py --boot_img boot_a.img --out boot_unpacked
+          cd boot_unpacked
+          cp kernel kernel_raw.gz && gunzip kernel_raw.gz
+          pip3 install vmlinux-to-elf
+          vmlinux-to-elf kernel_raw kernel.elf
+
+      - name: Find eBPF symbols
         run: |
-          cd eBPF-CVE-exploitation
-          
-          echo "=== Searching for 'adjacent' or 'ops' in exploit.c ==="
-          grep -rn "adjacent\|ops_offset\|bpf_map_ops\|BPF_MAP_OPS" CVEs/CVE-2021-3444/poc/ | head -n 40
+          cd boot_unpacked
+          echo "=== eBPF Symbols ==="
+          nm kernel.elf | grep -iE "array_map_ops|array_of_maps_map_ops|fd_array_map_delete_elem|commit_creds|init_cred" || echo "NOT FOUND"
           
           echo ""
-          echo "=== Searching for leak logic ==="
-          grep -rn "leak\|read_map\|dump_map" CVEs/CVE-2021-3444/poc/*.c | head -n 30
+          echo "=== bpf_map_alloc / bpf_map_get (for ops offset) ==="
+          nm kernel.elf | grep -iE "bpf_map_alloc|bpf_map_get" | head -n 5
           
           echo ""
-          echo "=== Show first 100 lines of exploit.c ==="
-          head -n 100 CVEs/CVE-2021-3444/poc/exploit.c
+          echo "=== bpf_array_lookup / array_map_lookup (for value offset) ==="
+          nm kernel.elf | grep -iE "array_map_lookup|bpf_array_lookup|array_map_alloc" | head -n 5
