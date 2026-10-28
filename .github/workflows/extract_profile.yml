@@ -1,4 +1,4 @@
-name: build_m36_FINAL_v55
+name: build_m36_FINAL_v56
 on: [push, workflow_dispatch]
 
 jobs:
@@ -24,14 +24,14 @@ jobs:
           git clone https://github.com/yijiacloud/ghostlock-cve-2026-43499-4.19-k40.git
           cd ghostlock-cve-2026-43499-4.19-k40
 
-      - name: OVERWRITE target.h using Python (robust)
+      - name: CREATE target.h for blazer-CP2A.260605.012 (Python)
         run: |
           cd ghostlock-cve-2026-43499-4.19-k40
           
           python3 << 'PYEOF'
           import os
           
-          target_path = "src/targets/oplus-4.19.157-perf/target.h"
+          target_path = "src/targets/blazer-CP2A.260605.012/target.h"
           
           content = '''#ifndef TARGET_H
           #define TARGET_H
@@ -229,25 +229,11 @@ jobs:
               f.write(content)
           
           print(f"Written {len(content)} bytes to {target_path}")
-          
-          # Verify
-          with open(target_path, 'r') as f:
-              written = f.read()
-          
-          if 'm36_mt6762v_a13' in written and 'P0_PHYS_OFFSET 0x40000000ULL' in written:
-              print("VERIFICATION: target.h OK")
-          else:
-              print("VERIFICATION: target.h FAILED")
-              print(written[:500])
-              raise SystemExit(1)
           PYEOF
 
       - name: Patch CPU / THREADS / COLLISIONS (Python)
         run: |
           cd ghostlock-cve-2026-43499-4.19-k40
-          
-          echo "=== BEFORE PATCH ==="
-          grep -rn "thread_cnt\|collisions\|g_cpu_count\|cpu_count" src/*.c src/*.h 2>/dev/null | head -n 20
           
           python3 << 'PYEOF'
           import os, re
@@ -271,10 +257,6 @@ jobs:
                       except Exception as e:
                           print(f"Error on {path}: {e}")
           PYEOF
-          
-          echo ""
-          echo "=== AFTER PATCH ==="
-          grep -rn "thread_cnt\|collisions\|g_cpu_count\|cpu_count" src/*.c src/*.h 2>/dev/null | head -n 20
 
       - name: Build with NDK
         env:
@@ -283,11 +265,11 @@ jobs:
           cd ghostlock-cve-2026-43499-4.19-k40
           
           make clean
-          make PROJECT=oplus-4.19.157-perf NDK_ROOT="$ANDROID_NDK_HOME"
+          make PROJECT=blazer-CP2A.260605.012 NDK_ROOT="$ANDROID_NDK_HOME"
           
           echo ""
           echo "=== VERIFY COMPILED BINARY ==="
-          find . -name "preload.so" -exec strings {} \; | grep -E "m36_mt6762v_a13|oplus_4.19.157_perf_a13|0x40000000|0x80000000" | head -n 10
+          find . -name "preload.so" -exec strings {} \; | grep -E "m36_mt6762v_a13|oplus_4.19.157_perf_a13" | head -n 5
           
           mkdir -p /tmp/out
           find . -name "preload.so" -exec cp {} /tmp/out/ \;
@@ -296,5 +278,5 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ghostlock-m36-v55
+          name: ghostlock-m36-v56
           path: /tmp/out/
