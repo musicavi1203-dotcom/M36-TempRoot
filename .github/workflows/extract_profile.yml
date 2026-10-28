@@ -1,81 +1,107 @@
-name: build_cpu_fix_v2
+name: build_ebpf_socket_test
 on: [push, workflow_dispatch]
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     steps:
-      - name: Checkout GhostLock
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo DEBIAN_FRONTEND=noninteractive apt-get update -y
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y gcc
+
+      - name: Create C source
+        run: |
+          cat << 'EOF' > ebpf_socket_test.c
+          #include <stdio.h>
+          #include <stdlib.h>
+          #include <string.h>
+          #include <errno.h>
+          #include <unistd.h>
+          #include <sys/syscall.h>
+          #include <sys/socket.h>
+          #include <linux/bpf.h>
+
+          static int bpf(int cmd, union bpf_attr *attr) {
+              return syscall(__NR_bpf, cmd, attr, sizeof(*attr));
+          }
+
+          int main() {
+              union bpf_attr attr;
+              int prog_fd;
+
+              printf("=== Testing eBPF socket filter load ===\n");
+
+              memset(&attr, 0, sizeof(attr));
+              attr.map_type = BPF_MAP_TYPE_ARRAY;
+              attr.key_size = sizeof(int);
+              attr.value_size = sizeof(int);
+              attr.max_entries = 1;
+              int map_fd = bpf(BPF_MAP_CREATE, &attr);
+              if (map_fd < 0) {
+                  printf("[-] BPF_MAP_CREATE failed: %s (errno=%d)\n", strerror(errno), errno);
+              } else {
+                  printf("[+] BPF_MAP_CREATE succeeded (fd=%d)\n", map_fd);
+                  close(map_fd);
+              }
+
+              struct bpf_insn prog[] = {
+                  { .code = BPF_ALU64 | BPF_MOV | BPF_K, .dst_reg = BPF_REG_0, .imm = 0 },
+                  { .code = BPF_JMP | BPF_EXIT },
+              };
+
+              char log_buf[4096];
+              memset(&attr, 0, sizeof(attr));
+              attr.prog_type = BPF_PROG_TYPE_SOCKET_FILTER;
+              attr.insn_cnt = sizeof(prog) / sizeof(prog[0]);
+              attr.insns = (unsigned long)prog;
+              attr.license = (unsigned long)"GPL";
+              attr.log_buf = (unsigned long)log_buf;
+              attr.log_size = sizeof(log_buf);
+              attr.log_level = 1;
+
+              prog_fd = bpf(BPF_PROG_LOAD, &attr);
+              if (prog_fd < 0) {
+                  printf("[-] BPF_PROG_LOAD failed: %s (errno=%d)\n", strerror(errno), errno);
+                  if (errno == EPERM) {
+                      printf("    -> EPERM: CAP_BPF or CAP_SYS_ADMIN required, or seccomp blocks it.\n");
+                  } else if (errno == EINVAL) {
+                      printf("    -> EINVAL: Kernel rejected the program.\n");
+                      printf("    -> Verifier log: %s\n", log_buf[0] ? log_buf : "(empty)");
+                  }
+                  return 1;
+              }
+
+              printf("[+] BPF_PROG_LOAD (SOCKET_FILTER) succeeded! fd=%d\n", prog_fd);
+
+              int sock = socket(AF_INET, SOCK_DGRAM, 0);
+              if (sock < 0) {
+                  perror("socket");
+                  return 1;
+              }
+
+              if (setsockopt(sock, SOL_SOCKET, SO_ATTACH_BPF, &prog_fd, sizeof(prog_fd)) < 0) {
+                  printf("[-] SO_ATTACH_BPF failed: %s (errno=%d)\n", strerror(errno), errno);
+              } else {
+                  printf("[+] SO_ATTACH_BPF succeeded! Socket filter is active.\n");
+              }
+
+              close(sock);
+              close(prog_fd);
+              printf("=== Test complete ===\n");
+              return 0;
+          }
+          EOF
+
+      - name: Compile
+        run: |
+          gcc -static -O2 ebpf_socket_test.c -o ebpf_socket_test
+          file ebpf_socket_test
+          ls -la ebpf_socket_test
+
+      - uses: actions/upload-artifact@v4
         with:
-          repository: YuKongA/ghostlock-app
-          path: ghostlock-app
-
-      - name: Patch Kotlin
-        run: |
-          cd ghostlock-app
-          sed -i 's/in 5..6/in 4..6/g' profile-core/src/main/kotlin/com/ghostlock/app/data/profile/ProfileMerger.kt
-          sed -i 's/require(profile.containsKey("execution")) { "missing execution tuning" }/\/\/ bypassed/' profile-core/src/main/kotlin/com/ghostlock/app/data/profile/ProfileMerger.kt
-
-      - name: Patch C++ (PAGE_SIZE + CPU fix v2)
-        run: |
-          cd ghostlock-app
-          
-          # PAGE_SIZE fix
-          FILE=$(find . -name "constants.hpp" | grep "core/kernel/constants.hpp" | head -n 1)
-          sed -i 's/    inline constexpr unsigned long PAGE_SIZE = 1UL << PAGE_SHIFT;/#undef PAGE_SIZE\n    inline constexpr unsigned long PAGE_SIZE = 1UL << PAGE_SHIFT;/' "$FILE"
-          
-          # CPU fix: use (sysconf - 1) instead of sysconf
-          find src/core -type f \( -name "*.cpp" -o -name "*.hpp" -o -name "*.h" \) -exec sed -i \
-            -e 's/sysconf(_SC_NPROCESSORS_ONLN)/(sysconf(_SC_NPROCESSORS_ONLN) - 1)/g' \
-            -e 's/get_nprocs()/(sysconf(_SC_NPROCESSORS_ONLN) - 1)/g' \
-            {} \;
-          
-          echo "=== Verification ==="
-          grep -rn "sysconf(_SC_NPROCESSORS_ONLN)" src/core/ | head -n 5
-
-      - name: Install Rust targets and cargo-ndk
-        run: |
-          rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android i686-linux-android
-          cargo install cargo-ndk
-
-      - name: Setup Android NDK
-        uses: nttld/setup-ndk@v1
-        id: setup-ndk
-        with:
-          ndk-version: r27c
-          add-to-path: true
-
-      - name: Build ghostlock-extract (Rust)
-        env:
-          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
-        run: |
-          cd ghostlock-app/tools/extract_rs
-          cargo ndk -t arm64-v8a build --release
-
-      - name: Setup Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'zulu'
-          java-version: '17'
-
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v4
-
-      - name: Build APK
-        env:
-          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
-        run: |
-          cd ghostlock-app
-          chmod +x gradlew
-          ./gradlew assemble --stacktrace
-
-      - name: Find and Copy APK
-        run: find ghostlock-app -name "*.apk" -exec cp {} ./ \;
-
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: ghostlock-cpu-fix-v2
-          path: "*.apk"
-          if-no-files-found: error
+          name: ebpf-socket-test
+          path: ebpf_socket_test
