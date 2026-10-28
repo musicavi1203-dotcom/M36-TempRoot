@@ -1,4 +1,4 @@
-name: build_ebpf_lpe
+name: build_ebpf_lpe_v2
 on: [push, workflow_dispatch]
 
 jobs:
@@ -12,16 +12,27 @@ jobs:
           sudo DEBIAN_FRONTEND=noninteractive apt-get update -y
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y gcc make git
 
-      - name: Clone and build CVE-2022-23222 exploit
+      - name: Clone and build CVE-2021-3444 exploit
         run: |
-          git clone https://github.com/tr3ee/CVE-2022-23222.git
-          cd CVE-2022-23222
-          gcc -static -O2 -pthread -I include exploit.c -o exp
-          file exp
-          ls -la exp
+          git clone https://github.com/Botti01/eBPF-CVE-exploitation.git
+          cd eBPF-CVE-exploitation
+          
+          echo "=== Finding exploit source ==="
+          find . -name "*.c" | head -n 20
+          
+          echo "=== Building ==="
+          # Navigate to the 4.19 exploit directory (adjusting path if needed)
+          cd CVEs/CVE-2021-3444/poc
+          ls -la
+          
+          # Compile with include path for common headers
+          gcc -static -O2 -I ../../../common/include exploit.c -o exploit
+          
+          file exploit
+          ls -la exploit
 
       - name: Upload exploit
         uses: actions/upload-artifact@v4
         with:
-          name: ebpf-lpe
-          path: CVE-2022-23222/exp
+          name: ebpf-lpe-v2
+          path: eBPF-CVE-exploitation/CVEs/CVE-2021-3444/poc/exploit
