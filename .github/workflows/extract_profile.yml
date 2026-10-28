@@ -1,38 +1,28 @@
-name: build_ebpf_lpe_v2
+name: inspect_exploit
 on: [push, workflow_dispatch]
 
 jobs:
-  build:
-    runs-on: ubuntu-24.04-arm
+  inspect:
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install dependencies
-        run: |
-          sudo DEBIAN_FRONTEND=noninteractive apt-get update -y
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y gcc make git
-
-      - name: Clone and build CVE-2021-3444 exploit
+      
+      - name: Clone exploit
         run: |
           git clone https://github.com/Botti01/eBPF-CVE-exploitation.git
           cd eBPF-CVE-exploitation
           
-          echo "=== Finding exploit source ==="
-          find . -name "*.c" | head -n 20
+      - name: Show key parts of exploit source
+        run: |
+          cd eBPF-CVE-exploitation
           
-          echo "=== Building ==="
-          # Navigate to the 4.19 exploit directory (adjusting path if needed)
-          cd CVEs/CVE-2021-3444/poc
-          ls -la
+          echo "=== Searching for 'adjacent' or 'ops' in exploit.c ==="
+          grep -rn "adjacent\|ops_offset\|bpf_map_ops\|BPF_MAP_OPS" CVEs/CVE-2021-3444/poc/ | head -n 40
           
-          # Compile with include path for common headers
-          gcc -static -O2 -I ../../../common/include exploit.c -o exploit
+          echo ""
+          echo "=== Searching for leak logic ==="
+          grep -rn "leak\|read_map\|dump_map" CVEs/CVE-2021-3444/poc/*.c | head -n 30
           
-          file exploit
-          ls -la exploit
-
-      - name: Upload exploit
-        uses: actions/upload-artifact@v4
-        with:
-          name: ebpf-lpe-v2
-          path: eBPF-CVE-exploitation/CVEs/CVE-2021-3444/poc/exploit
+          echo ""
+          echo "=== Show first 100 lines of exploit.c ==="
+          head -n 100 CVEs/CVE-2021-3444/poc/exploit.c
