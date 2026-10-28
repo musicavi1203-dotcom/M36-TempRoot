@@ -10,7 +10,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo DEBIAN_FRONTEND=noninteractive apt-get update -y
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y gcc clang make git gcc-aarch64-linux-android
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y gcc clang make git
 
       - name: Clone K40 port
         run: |
@@ -21,8 +21,6 @@ jobs:
         run: |
           cd ghostlock-cve-2026-43499-4.19-k40
           
-          # We will generate a completely new target.h with the addresses we extracted
-          # using the nm command output.
           cat << 'EOF' > src/targets/oplus-4.19.157-perf/target.h
           #pragma once
           #include <stdint.h>
@@ -60,15 +58,12 @@ jobs:
       - name: Build the exploit
         run: |
           cd ghostlock-cve-2026-43499-4.19-k40
-          # The exploit compiles an executable and a preload.so
           make
           
           echo "=== Built files ==="
           find . -name "*.so" -o -name "exploit" -o -name "preload*" | head -n 20
           
-          # Copy files out for upload
           mkdir -p /tmp/out
-          cp preload.so exploit /tmp/out/ 2>/dev/null || echo "Files not found in root, checking dirs..."
           find . -name "preload.so" -exec cp {} /tmp/out/ \;
           find . -name "exploit" -exec cp {} /tmp/out/ \;
           
