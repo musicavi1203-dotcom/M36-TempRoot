@@ -1,79 +1,24 @@
-name: build_k40_port_for_m36_v5
+name: show_k40_target
 on: [push, workflow_dispatch]
 
 jobs:
-  build:
+  show:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install dependencies
-        run: |
-          sudo DEBIAN_FRONTEND=noninteractive apt-get update -y
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y gcc clang make git
-
-      - name: Setup Android NDK
-        uses: nttld/setup-ndk@v1
-        id: setup-ndk
-        with:
-          ndk-version: r27c
-          add-to-path: true
-
-      - name: Clone K40 port
+      - name: Clone K40 port and show target.h
         run: |
           git clone https://github.com/yijiacloud/ghostlock-cve-2026-43499-4.19-k40.git
           cd ghostlock-cve-2026-43499-4.19-k40
-
-      - name: Patch missing definitions for NDK
-        run: |
-          cd ghostlock-cve-2026-43499-4.19-k40
-          # Add SECCOMP_MODE_OFF definition if missing
-          sed -i '1i #ifndef SECCOMP_MODE_OFF\n#define SECCOMP_MODE_OFF 0\n#endif' src/root.c
-          sed -i '1i #ifndef SECCOMP_MODE_OFF\n#define SECCOMP_MODE_OFF 0\n#endif' src/offset.h
           
-          echo "=== Patched root.c header ==="
-          head -n 5 src/root.c
-
-      - name: Patch target.h for M36
-        run: |
-          cd ghostlock-cve-2026-43499-4.19-k40
-          mkdir -p src/targets/blazer-CP2A.260605.012
-          cat << 'EOF' > src/targets/blazer-CP2A.260605.012/target.h
-          #pragma once
-          #include <stdint.h>
-
-          #define KERNEL_BASE             0xffffff8008080000UL
-          #define INIT_TASK_OFF           0x16fbe40UL
-          #define INIT_CRED_OFF           0x1707f48UL
-          #define SELINUX_STATE_OFF       0x1925fc0UL
-          #define SECURITY_HOOK_HEADS_OFF 0x14c8288UL
-          #define KMALLOC_CACHES_OFF      0x14c7df0UL
-          #define TASK_REAL_CRED_OFF      1880
-          #define TASK_CRED_OFF           1888
-          #define TASK_COMM_OFF           1896
-          #define CRED_CAPS_OFF           40
-          #define CRED_SECURITY_OFF       120
-          #define SELINUX_CRED_BLOB_OFF   0
-          #define PIPE_INODE_INFO_OFF     0
-          #define PIPE_BUFFER_OFF         0
-          #define CONFIGFS_BUFFER_OFF     0
-          #define ASHMEM_MISC_OFF         0
-          #define EMPTY_ZERO_PAGE_OFF     0x190e000UL
-          EOF
-
-      - name: Build with NDK
-        env:
-          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
-        run: |
-          cd ghostlock-cve-2026-43499-4.19-k40
-          make PROJECT=blazer-CP2A.260605.012 NDK_ROOT="$ANDROID_NDK_HOME" CFLAGS="-I/usr/include/aarch64-linux-gnu"
+          echo "=== Available target directories ==="
+          ls -la src/targets/
           
-          mkdir -p /tmp/out
-          find . -name "preload.so" -exec cp {} /tmp/out/ \;
-          find . -name "su_daemon_aarch64_pie" -exec cp {} /tmp/out/ \;
-          ls -la /tmp/out/
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ghostlock-k40-port-v2
-          path: /tmp/out/
+          echo ""
+          echo "=== Full oplus-4.19.157-perf/target.h ==="
+          cat src/targets/oplus-4.19.157-perf/target.h
+          
+          echo ""
+          echo "=== File size: ==="
+          wc -l src/targets/oplus-4.19.157-perf/target.h
