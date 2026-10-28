@@ -10,14 +10,13 @@ jobs:
       - name: Install dependencies
         run: |
           sudo DEBIAN_FRONTEND=noninteractive apt-get update -y
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y clang gcc make git libpthread-stubs0-dev
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y gcc make git
 
-      - name: Clone CVE-2022-23222 exploit
+      - name: Clone and build CVE-2022-23222 exploit
         run: |
           git clone https://github.com/tr3ee/CVE-2022-23222.git
           cd CVE-2022-23222
-          # Sometimes the Makefile needs tweaking for static ARM64, let's just use gcc directly
-          gcc -static -O2 -pthread exp.c -o exp
+          gcc -static -O2 -pthread -I include exploit.c -o exp
           file exp
           ls -la exp
 
