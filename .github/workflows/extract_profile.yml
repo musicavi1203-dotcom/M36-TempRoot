@@ -1,8 +1,8 @@
-name: extract_ebpf_offsets
+name: disassemble_bpf
 on: [push, workflow_dispatch]
 
 jobs:
-  extract:
+  disassemble:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout M36-TempRoot
@@ -18,16 +18,17 @@ jobs:
           pip3 install vmlinux-to-elf
           vmlinux-to-elf kernel_raw kernel.elf
 
-      - name: Find eBPF symbols
+      - name: Install aarch64 binutils
+        run: sudo apt-get update && sudo apt-get install -y binutils-aarch64-linux-gnu
+
+      - name: Disassemble array_map_lookup_elem
         run: |
           cd boot_unpacked
-          echo "=== eBPF Symbols ==="
-          nm kernel.elf | grep -iE "array_map_ops|array_of_maps_map_ops|fd_array_map_delete_elem|commit_creds|init_cred" || echo "NOT FOUND"
-          
-          echo ""
-          echo "=== bpf_map_alloc / bpf_map_get (for ops offset) ==="
-          nm kernel.elf | grep -iE "bpf_map_alloc|bpf_map_get" | head -n 5
-          
-          echo ""
-          echo "=== bpf_array_lookup / array_map_lookup (for value offset) ==="
-          nm kernel.elf | grep -iE "array_map_lookup|bpf_array_lookup|array_map_alloc" | head -n 5
+          echo "=== array_map_lookup_elem ==="
+          aarch64-linux-gnu-objdump -d --no-show-raw-insn kernel.elf | grep -A 40 "<array_map_lookup_elem>:" | head -n 45
+
+      - name: Disassemble array_map_alloc
+        run: |
+          cd boot_unpacked
+          echo "=== array_map_alloc ==="
+          aarch64-linux-gnu-objdump -d --no-show-raw-insn kernel.elf | grep -A 50 "<array_map_alloc>:" | head -n 55
